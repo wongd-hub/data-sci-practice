@@ -281,14 +281,16 @@ grid.arrange(
 )
 
 ## 3. Missing/NAs ----
+all_wrk_tmp <- all_wrk
+
 # Noting some missing values hidden as empty strings, convert to NAs and count number of missings
-#  In total, 6,364 / 12,970rows have at least one NA in them; definitely don't want to cut 50% of observations out of the dataset
-all_wrk[rowSums(is.na(all_wrk %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>% nrow()
+#  In total, 6,364 / 12,970 rows have at least one NA in them; definitely don't want to cut 50% of observations out of the dataset
+all_wrk_tmp[rowSums(is.na(all_wrk_tmp %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>% nrow()
 
 # Where do these missing values reside?
-(all_wrk %>% 
+(all_wrk_tmp %>% 
   mutate_all(.funs = ~ na_if(., "")) %>% 
-  sapply(function(x) sum(is.na(x))) / nrow(all_wrk)) %>% 
+  sapply(function(x) sum(is.na(x))) / nrow(all_wrk_tmp)) %>% 
   as.list() %>% 
   data.frame() %>% 
   gather(variable, missing_pct) %>% 
@@ -301,90 +303,529 @@ all_wrk[rowSums(is.na(all_wrk %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>
 #  HomePlanet - will see if this is related to Cabin at all
 #  CryoSleep are confined to their quarters so will have likely spent no money on other amenities
 
-# Imputation
-#  Luxury Amenities part 1 - CryoSleeping Individuals
+# Will be using a mix of imputation and prediction here
+# We'll focus on imputing values for features that we know we'll use in our model, or variables that
+#  are used to impute those features.
+
+# 3a. CryoSleep ----
 #   Individuals in CryoSleep are confined to their Cabin throughout the duration of the interstellar trip,
 #   this means that they are likely not to have spent any money on the additional luxury amenities onboard the ship.
-all_cryo_sub <- all_wrk %>% 
+all_cryo_sub <- all_wrk_tmp %>% 
   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService)
 
 all_cryo_sub %>% filter(CryoSleep & lux_spend > 0) %>% nrow() == 0 # No-one in CryoSleep has spent on amenities
 
+# So we know that any rows with a non-zero sum of luxury spend will not be in CryoSleep
+
+# Does this go the other way? No, not all people who spent nothing on luxuries were in CryoSleep, however a large
+#  percentage were. After imputation, we can check if this is adhered to.
+nonspender_cryosleep_rate <- all_wrk_tmp %>% 
+  mutate(lux_spend_keepnas = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
+  filter(!is.na(CryoSleep) & lux_spend_keepnas == 0) %>% 
+  group_by(CryoSleep) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n)) %>% 
+  filter(CryoSleep) %>% 
+  pull(pct)
+
+all_wrk_tmp <- all_wrk_tmp %>% 
+  mutate(
+    lux_spend_ignorenas = rowSums(select(., ShoppingMall, VRDeck, FoodCourt, Spa, RoomService), na.rm = TRUE),
+    CryoSleep = case_when(
+      # This is the only subset we can infer with the information we have at the present
+      #  People with 0 spend may have just chosen to spend nothing on extra amenities.
+      is.na(CryoSleep) & lux_spend_ignorenas > 0 ~ FALSE,
+      TRUE ~ CryoSleep
+    )
+  )
+
+imput_cryosleep <- all_wrk_tmp %>%
+  mutate(
+    HomePlanet_fct = factor(HomePlanet), 
+    Destination_fct = factor(Destination), 
+    Deck_fct = factor(Deck)
+  ) %>%
+  select(CryoSleep, HomePlanet_fct, Destination_fct, Deck_fct, ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>%
+  mice(method = 'rf', seed = 24601, maxit = 1) %>%
+  complete() %>% 
+  mutate(CryoSleep = as.logical(CryoSleep)) %>% 
+  select(-ends_with('_fct'))
+
+# Note that imputation using a random forest resulted in a very similar proportion of 0-spenders being in CryoSleep
+imput_cryosleep %>% 
+  mutate(lux_spend_keepnas = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
+  filter(!is.na(CryoSleep) & lux_spend_keepnas == 0) %>% 
+  group_by(CryoSleep) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n)) %>% 
+  filter(CryoSleep) %>% 
+  pull(pct)
+
+# For now, add in the imputed values back to the data-frame
+all_wrk_tmp <- all_wrk_tmp %>% 
+  select(-CryoSleep) %>% 
+  bind_cols(imput_cryosleep %>% select(CryoSleep))
+
+# See if imputed values on aggregate change the distribution
+all_wrk %>%
+  filter(!is.na(CryoSleep)) %>% 
+  group_by(CryoSleep) %>% 
+  tally() %>% 
+  mutate(dataset = 'Unmodified') %>% 
+  bind_rows(
+    all_wrk_tmp %>% 
+      filter(!is.na(CryoSleep)) %>% 
+      group_by(CryoSleep) %>% 
+      tally() %>% 
+      mutate(dataset = 'Imputed')
+  ) %>% 
+  group_by(dataset) %>% 
+  mutate(pct = n / sum(n)) %>% 
+  ungroup() %>% 
+  ggplot(aes(x = dataset, fill = CryoSleep, y = pct, label = percent(pct, 0.1))) +
+  geom_col(position = 'dodge') +
+  scale_y_continuous(labels = percent) +
+  labs(x = 'Dataset', y = 'Percent') +
+  geom_text(
+    position = position_dodge(width = .9),
+    vjust = -0.5,
+    size = 3
+  ) +
+  theme(legend.position = 'bottom')
+
+# 3bi. Luxury Amenities part 1 - CryoSleeping Individuals ----
 # We can then infer that all luxury amenities will be 0 for people in CryoSleep - this will fix luxury amenities for 513 observations
 all_cryo_sub %>% filter(CryoSleep & is.na(lux_spend)) %>% nrow()
 
 # We now replace all NAs in the luxury amenities with 0 where CryoSleep is TRUE
-all_wrk <- all_wrk %>% 
+all_wrk_tmp <- all_wrk_tmp %>% 
   mutate_at(
     .vars = vars(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService),
     .funs = ~ ifelse(CryoSleep & is.na(.), 0, .)
   )
 
-
-#  Luxury Amenities part 2 - Non-CryoSleeping Individuals
+# 3bii. Luxury Amenities part 2 - Non-CryoSleeping Individuals ----
 
 # Viewing relationship to other variables
-# all_wrk %>% 
+# all_wrk_tmp %>% 
 #   filter(!CryoSleep) %>% 
 #   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
 #   ggplot(aes(y = lux_spend, x = Deck, fill = Side)) +
 #   geom_boxplot() +
 #   scale_y_continuous(labels = dollar)
 
-# all_wrk %>% 
+# all_wrk_tmp %>% 
 #   filter(!CryoSleep) %>% 
 #   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
 #   ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
 #   geom_boxplot() +
 #   scale_y_continuous(labels = dollar)
 
-# all_wrk %>%
+# all_wrk_tmp %>%
 #   filter(!CryoSleep) %>%
 #   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
 #   ggplot(aes(y = lux_spend, x = as.factor(group_size))) +
 #   geom_boxplot() +
 #   scale_y_continuous(labels = dollar)
 
-all_wrk %>%
-  filter(!CryoSleep) %>%
-  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
-  mutate(Num = as.numeric(Num)) %>%
-  ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
-  geom_point() +
-  scale_y_continuous(labels = dollar) +
-  scale_x_continuous(labels = comma)
+# all_wrk_tmp %>%
+#   filter(!CryoSleep) %>%
+#   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
+#   mutate(Num = as.numeric(Num)) %>%
+#   ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
+#   geom_point() +
+#   scale_y_continuous(labels = dollar) +
+#   scale_x_continuous(labels = comma)
 #  Side note, HomePlanet appears to be related to room number a bit - Europa are all low ~<500 numbers
 
 
-#   Amenities spend appears to be related to Destination, HomePlanet, Deck, attempt imputation via 
-#    linear regression
-all_wrk_noncryo <- all_wrk %>% filter(!CryoSleep)
+#   Amenities spend otherwise appears to be related to Destination, HomePlanet, Deck, attempt
+#    imputation via random forest
+all_wrk_noncryo <- all_wrk_tmp %>% filter(!CryoSleep | is.na(CryoSleep))
   
 imput_lux_spend <- all_wrk_noncryo %>% 
-  select(HomePlanet, Destination, Deck, ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
-  mice(method = 'rf') %>% 
-  complete()
+  mutate(
+    HomePlanet_fct = factor(HomePlanet), 
+    Destination_fct = factor(Destination), 
+    Deck_fct = factor(Deck)
+  ) %>% 
+  select(HomePlanet_fct, Destination_fct, Deck_fct, ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+  # No imputation method for the first three variables, then random forests for the rest
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete() %>% 
+  select(-ends_with('_fct'))
 
-#   Compare imputed values vs. non-imputed
-bind_rows(
-  all_wrk_noncryo %>% 
-    select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
-    gather(var, value) %>% 
-    mutate(dataset = 'Non-Imputed'),
-  imput_lux_spend %>% 
-    select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
-    gather(var, value) %>% 
-    mutate(dataset = 'Imputed')
-) %>% 
-  ggplot(aes(x = value)) +
+#  Compare imputed values vs. non-imputed (label rows with NAs with 'imputed' flag)
+all_wrk_noncryo %>% 
+  mutate(imputed = ifelse(
+    is.na(ShoppingMall + VRDeck + FoodCourt + Spa + RoomService),
+    TRUE, FALSE
+  )) %>%
+  select(-ShoppingMall, -VRDeck, -FoodCourt, -Spa, -RoomService) %>% 
+  bind_cols(
+    imput_lux_spend %>% 
+      select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService)
+  ) %>% 
+  select(imputed, ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+  gather(variable, value, -imputed) %>% 
+  ggplot(aes(x = value, fill = imputed)) +
   geom_histogram() +
-  facet_grid(rows = vars(var), cols = vars(dataset), scales = 'free') +
-  scale_x_continuous(labels = dollar) +
+  facet_grid(rows = vars(variable), scale = 'free') +
   scale_y_continuous(labels = comma) +
-  labs(x = 'Spend', y = 'Count')
+  scale_x_continuous(labels = dollar) +
+  labs(x = 'Value', y = 'Count', fill = 'Imputed?')
 
-#  Add these values back to the dataset and dive deeper (label rows with NAs with 'imputed' flag)
+#   Add imputed values back to dataset
+all_wrk_tmp <- all_wrk_tmp %>% 
+  # Filter out !CryoSleep and is.na(CryoSleep)
+  filter(CryoSleep) %>% 
+  bind_rows(
+    all_wrk_noncryo %>%
+      select(-ShoppingMall, -VRDeck, -FoodCourt, -Spa, -RoomService) %>% 
+      bind_cols(
+        imput_lux_spend %>% 
+          select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService)
+      )
+  ) %>% 
+  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService)
+
+# Check distributions before and after 
+all_wrk %>% 
+  select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+  mutate(dataset = 'Unmodified') %>% 
+  bind_rows(
+    all_wrk_tmp %>% 
+      select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+      mutate(dataset = 'Imputed')
+  ) %>% 
+  gather(variable, value, -dataset) %>% 
+  ggplot(aes(x = value, fill = dataset)) +
+  geom_histogram(position = 'dodge') +
+  facet_grid(rows = vars(variable), scales = 'free') +
+  theme(legend.position = 'bottom') +
+  scale_x_continuous(limits = c(NA, 10000)) +
+  scale_y_continuous(labels = comma) +
+  labs(x = 'Value', y = 'Count', fill = 'Dataset')
+
+# 3b. Inferring HomePlanet using Deck & Room Number ----
+# Determine whether HomePlanet is related to Deck
+#  From this we can reasonably infer that if in Decks A, B, C, or T, your HomePlanet was Europa
+#  Further, it appears that Deck G is only inhabited by people from Earth
+all_wrk_tmp %>% 
+  group_by(HomePlanet, Deck) %>% 
+  tally() %>% 
+  ggplot(aes(x = Deck, y = n, fill = HomePlanet)) +
+  geom_col(position = 'dodge')
+
+# If passenger's Deck is A-C or T, fix HomePlanet to Europa
+# If passenger's Deck is G, fix HomePlanet to Earth
+all_wrk_tmp <- all_wrk_tmp %>% 
+  mutate(
+    HomePlanet = case_when(
+      is.na(HomePlanet) & Deck %in% c('A', 'B', 'C', 'T') ~ 'Europa',
+      is.na(HomePlanet) & Deck == 'G' ~ 'Earth',
+      TRUE ~ HomePlanet
+    )
+  )
+
+# Room number also seems related to HomePlanet
+all_wrk_tmp %>% 
+  mutate(Num = as.numeric(Num)) %>% 
+  select(HomePlanet, Num) %>% 
+  ggplot(aes(x = Num, fill = HomePlanet)) +
+  geom_histogram(position = 'dodge')
+  
+# Finally, those within the same Group will likely have the same HomePlanet
+all_wrk_tmp %>% 
+  distinct(GroupId, HomePlanet) %>% 
+  filter(!is.na(HomePlanet)) %>% 
+  group_by(GroupId) %>% 
+  summarise(n = n(), .groups = 'drop') %>% 
+  filter(n > 1) %>% nrow() == 0 # Confirmed
+
+all_wrk_grp_homes <- all_wrk_tmp %>% 
+  filter(!is.na(HomePlanet)) %>% 
+  distinct(GroupId, HomePlanet) %>% 
+  rename(HomePlanet_supplement = HomePlanet)
+
+all_wrk_tmp <- all_wrk_tmp %>% 
+  left_join(all_wrk_grp_homes, by = c("GroupId")) %>% 
+  mutate(HomePlanet = coalesce(HomePlanet, HomePlanet_supplement), .keep = 'unused')
+  
+# For all else, impute HomePlanet using room number and deck using mice
+imput_homeplanet <- all_wrk_tmp %>% 
+  mutate(
+    HomePlanet_fct = factor(HomePlanet),
+    Deck_fct = factor(Deck),
+    Num_num = as.numeric(Num)
+  ) %>% 
+  select(HomePlanet_fct, Deck_fct, Num_num) %>% 
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete() %>% 
+  mutate(HomePlanet = as.character(HomePlanet_fct)) %>% 
+  select(-ends_with('_fct'), -ends_with('_num'))
+
+# Add these back to the dataset
+all_wrk_tmp <- all_wrk_tmp %>% 
+  select(-HomePlanet) %>% 
+  bind_cols(imput_homeplanet)
+  
+# Check distribution of imputed
+all_wrk %>% 
+  group_by(HomePlanet) %>% 
+  tally() %>% 
+  mutate(pct = n / sum(n)) %>% 
+  mutate(dataset = 'Unmodified') %>% 
+  bind_rows(
+    all_wrk_tmp %>% 
+      group_by(HomePlanet) %>% 
+      tally() %>% 
+      mutate(pct = n / sum(n)) %>% 
+      mutate(dataset = 'Imputed')
+  ) %>% 
+  ggplot(aes(x = HomePlanet, y = pct, fill = dataset, label = percent(pct, 0.1))) +
+  geom_col(position = 'dodge') +
+  scale_y_continuous(labels = percent) +
+  theme(legend.position = 'bottom') +  
+  labs(x = 'Home Planet', y = 'Percent', fill = 'Dataset') +
+  geom_text(
+    position = position_dodge(width = .9),
+    vjust = -0.5,
+    size = 3
+  )
+
+# 3c. Inferring Deck using Group ----
+# Check if there are any groups between test and training - there are none
+all_wrk_tmp %>% 
+  distinct(GroupId, dataset) %>% 
+  group_by(GroupId) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  filter(n > 1) %>% 
+  arrange_all()
+
+# Hypothesis is that, although groups don't stay in the same room, they tend to stay 
+#  in decks that are adjacent to each other
+
+# First, we check if everyone in the same group generally stay in the same room together
+all_wrk_grps <- all_wrk_tmp %>% 
+  filter(group_size > 1) %>% 
+  select(GroupId, PassengerId, Deck, Num, Side) %>% 
+  group_by(GroupId) %>% 
+  mutate(count = n()) %>% 
+  ungroup() %>% 
+  arrange(GroupId, PassengerId)
+
+# Checking to see if whole groups stay within the exact same room
+#  Doesn't seem to occur - only pattern is larger groups are more likely to be spread across rooms
+all_wrk_grps %>% 
+  # All distinct combinations of GroupId and Cabin
+  distinct(GroupId, Deck, Num, Side) %>% 
+  group_by(GroupId) %>% 
+  tally() %>% 
+  # Adding back group_size variable
+  left_join(all_grps, by = 'GroupId') %>% 
+  mutate(n_grouping = ifelse(n == 1, 'one room', 'more than one room')) %>% 
+  group_by(group_size, n_grouping) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  group_by(group_size) %>% 
+  mutate(total = sum(n)) %>% 
+  mutate(pct = n / total) %>% 
+  ggplot(aes(x = group_size, y = pct, fill = n_grouping)) +
+  geom_col(position = 'dodge')
+  
+# Check for Deck closeness within groups
+#  Assumption here is that decks are in alphabetical order on the ship and therefore are closer
+#   together
+deck_refactor <- tibble(
+  Deck = all_wrk_grps %>% filter(!is.na(Deck)) %>% distinct(Deck) %>% pull(Deck) %>% sort(),
+  DeckNum = c(1:(all_wrk_grps %>% filter(!is.na(Deck)) %>% distinct(Deck) %>% pull(Deck) %>% length()))
+)
+
+all_wrk_grps %>% 
+  left_join(deck_refactor, by = 'Deck') %>% 
+  group_by(GroupId) %>% 
+  summarise(
+    range = max(DeckNum) - min(DeckNum),
+    .groups = 'drop'
+  ) %>% 
+  ggplot(aes(x = range)) +
+  geom_histogram() +
+  scale_y_continuous(labels = comma) +
+  labs(x = 'Deck Distance with Groups', y = 'Count')
+
+# Any other relationships? VIP/spenders?
+#  Slight relationship with number, tend to be smaller room numbers
+all_wrk_tmp %>% 
+  mutate(Num = as.numeric(Num)) %>% 
+  ggplot(aes(x = Num, fill = VIP)) +
+  geom_histogram()
+
+#  Not really any relationship with Decks
+all_wrk_tmp %>% 
+  group_by(Deck, VIP) %>% 
+  tally() %>% 
+  ungroup() %>% 
+  ggplot(aes(y = n, x = Deck, fill = VIP)) +
+  geom_col()
+
+# Any relationship with lux_spend? Not really
+all_wrk_tmp %>% 
+  ggplot(aes(x = lux_spend)) +
+  geom_histogram() +
+  facet_grid(rows = vars(Deck))
+
+# Could perform some probability distribution stuff with the above distribution
+# Imputing with mice and using GroupId doesn't really work though, we'll create a 'missing' bucket for now
+
+all_wrk_tmp <- all_wrk_tmp %>% 
+  mutate(Deck = ifelse(is.na(Deck), 'NA', Deck))
+
+# 3d. Final Rollup ----
+# Check for NAs in our features of interest
+all_wrk_tmp %>% 
+  select_at(vars(inf_value %>% filter(IV > 0.1) %>% .$Variable)) %>% 
+  sapply(function(x) sum(is.na(x))) # All good
+
+# Finally, check that we haven't lost anyone
+identical(
+  all_wrk %>% distinct(GroupId, PassengerId) %>% arrange_all(),
+  all_wrk_tmp %>% distinct(GroupId, PassengerId) %>% arrange_all()
+) # True, all good.
 
 ## 4. Training ----
-# Split train dataset into training and validation sets
-train_set <- sample(nrow(GermanCredit), round(0.6*nrow(GermanCredit)))
+# 4a. Splitting into train/validate/test ----
+# Split back into training and test sets
+test_clean <- all_wrk_tmp %>% filter(dataset == 'test') %>% select(-dataset)
+train_clean <- all_wrk_tmp %>% filter(dataset == 'train') %>% select(-dataset)
+
+# Split train_clean dataset into training and validation sets - ensure people in the 
+#  same group are either in one or the other dataset
+set.seed(24601)
+
+train_val_split <- train_clean %>% 
+  group_by(GroupId) %>% 
+  # Get count of rows under each GroupId
+  tally() %>% 
+  # Generate a random number for each row which will be compared against the 
+  #  probability of being in the test set (70%).
+  mutate(rand = runif(nrow(.))) %>% 
+  mutate(grouping = ifelse(rand < 0.7, 'train', 'validation'), .keep = 'unused')
+
+# Confirm this preserves the ~70/30 split we've aimed for:
+train_val_split %>% 
+  group_by(grouping) %>% 
+  summarise(n = sum(n), .groups = 'drop') %>% 
+  mutate(pct = percent(n / sum(n), 0.1))
+
+train_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'train') %>% .$GroupId))
+valid_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'validation') %>% .$GroupId))
+
+# 4b. Fitting process ----
+
+
+## X. Archive ----
+
+#   Compare imputed values vs. non-imputed
+# bind_rows(
+#   all_wrk_noncryo %>% 
+#     select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+#     gather(var, value) %>% 
+#     mutate(dataset = 'Non-Imputed'),
+#   imput_lux_spend %>% 
+#     select(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService) %>% 
+#     gather(var, value) %>% 
+#     mutate(dataset = 'Imputed')
+# ) %>% 
+#   ggplot(aes(x = value)) +
+#   geom_histogram() +
+#   facet_grid(rows = vars(var), cols = vars(dataset), scales = 'free') +
+#   scale_x_continuous(labels = dollar) +
+#   scale_y_continuous(labels = comma) +
+#   labs(x = 'Spend', y = 'Count')
+
+# 3b. Inferring room number using group
+
+# # Checking to see if groups stay within the same side
+# all_wrk_grps %>% 
+#   # All distinct combinations of GroupId and Side
+#   distinct(GroupId, Side) %>% 
+#   group_by(GroupId) %>% 
+#   tally() %>% 
+#   # Adding back group_size variable
+#   left_join(all_grps, by = 'GroupId') %>% 
+#   mutate(n_grouping = ifelse(n == 1, 'one side', 'more than one side')) %>% 
+#   group_by(group_size, n_grouping) %>% 
+#   tally() %>% 
+#   ungroup() %>% 
+#   group_by(group_size) %>% 
+#   mutate(total = sum(n)) %>% 
+#   mutate(pct = n / total)
+
+# all_wrk_tmp %>% 
+#   filter(!is.na(CryoSleep)) %>% 
+#   group_by(HomePlanet, Destination, CryoSleep) %>% 
+#   tally() %>% 
+#   group_by(HomePlanet, Destination) %>% 
+#   mutate(
+#     total = sum(n),
+#     pct = n / total
+#   ) %>% 
+#   ungroup() %>% 
+#   filter(CryoSleep) %>% 
+#   ggplot(aes(x = HomePlanet, y = pct, fill = Destination)) +
+#   geom_col(position = 'dodge')
+
+# # Sort out the CryoSleep values that couldn't be imputed in previously
+# CryoSleep = case_when(
+#   is.na(CryoSleep) & lux_spend > 0 ~ FALSE,
+#   # Use the rate of cryosleeping for 0-spenders to randomly pick who will be in cryosleep
+#   is.na(CryoSleep) & !is.na(lux_spend) ~ ifelse(runif(1) <= nonspender_cryosleep_rate, TRUE, FALSE),
+#   TRUE ~ CryoSleep
+# )
+
+# # Fr all else - Infer using mice random forest and check if it has adhered to this range
+# tmp <- all_wrk_tmp %>%
+#   mutate(
+#     HomePlanet_fct = factor(HomePlanet),
+#     Deck_fct = factor(Deck),
+#     GroupId_num = as.numeric(GroupId)
+#   ) %>%
+#   select(Deck_fct, HomePlanet_fct, GroupId_num) %>%
+#   mice(method = c('pmm', '', ''), seed = 24601, maxit = 1) %>%
+#   complete()
+# 
+# tmp %>%
+#   mutate(Deck = as.character(Deck_fct)) %>%
+#   left_join(deck_refactor, by = 'Deck') %>%
+#   group_by(GroupId_num) %>%
+#   summarise(
+#     range = max(DeckNum) - min(DeckNum),
+#     .groups = 'drop'
+#   ) %>%
+#   ggplot(aes(x = range)) +
+#   geom_histogram() +
+#   scale_y_continuous(labels = comma) +
+#   labs(x = 'Deck Distance with Groups', y = 'Count')
+
+# # There are some values in the features of interest that couldn't be imputed by mice earlier, let's go over them again now
+# all_wrk_tmp <- all_wrk_tmp %>% 
+#   select(-starts_with('lux_spend'))
+# 
+# imput_all <- all_wrk_tmp %>% 
+#   select(
+#     Destination, Age, VIP, Transported, group_size, 
+#     RoomService, FoodCourt, ShoppingMall, Spa, VRDeck, 
+#     CryoSleep, HomePlanet
+#   ) %>% 
+#   # Convert all character columns to factors
+#   mutate_if(
+#     is.character,
+#     factor
+#   ) %>% 
+#   # Current a bug in versions of mice < 3.14.2 that breaks using
+#   #  rf on columns with only one NA
+#   # https://stackoverflow.com/a/70246986/17569265
+#   mice(method = 'cart') %>% 
+#   complete()
