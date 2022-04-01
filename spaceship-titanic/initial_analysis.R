@@ -5,7 +5,8 @@ invisible({
   packages <- c(
     "tidyverse", "data.table", "ggplot2", 
     "scales", "tictoc", "infotheo", 
-    "Information", "gridExtra", "mice"
+    "Information", "gridExtra", "mice",
+    "randomForest", "caret"
   )
 
   if(!all(packages %in% rownames(installed.packages()))) {
@@ -50,8 +51,7 @@ all %>%
 #  Potentially interesting for feature engineering:
 #   Passenger ID is in form gggg_pp, with gggg representing the travel group and pp representing passenger within group
 #   Cabin is in the form deck/num/side. Side can be P (Port) or S (Starboard).
-#   Name can be split into first and last name, although using last name to derive family may not be much better than using group 
-#    from Passenger ID
+#   Name can be split into first and last name, although using last name to derive family may not be much better than using group from Passenger ID
 all %>% 
   select(-dataset) %>% 
   select_if(is.character) %>% 
@@ -688,12 +688,19 @@ all_wrk_tmp %>%
   select_at(vars(inf_value %>% filter(IV > 0.1) %>% .$Variable)) %>% 
   sapply(function(x) sum(is.na(x))) # All good
 
-# Finally, check that we haven't lost anyone
+# Check that we haven't lost anyone
 identical(
   all_wrk %>% distinct(GroupId, PassengerId) %>% arrange_all(),
   all_wrk_tmp %>% distinct(GroupId, PassengerId) %>% arrange_all()
 ) # True, all good.
 
+# Finally, convert features of interest and response into factors unless they're numeric
+all_wrk_tmp <- all_wrk_tmp %>% 
+  mutate_at(
+    .vars = vars(Transported, CryoSleep, Deck, HomePlanet),
+    .funs = factor
+  )
+  
 ## 4. Training ----
 # 4a. Splitting into train/validate/test ----
 # Split back into training and test sets
@@ -723,7 +730,71 @@ train_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(gro
 valid_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'validation') %>% .$GroupId))
 
 # 4b. Fitting process ----
+set.seed(24601)
 
+st_rf_mod <- randomForest(
+  as.formula(
+    paste('Transported', "~", inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = " + "))
+  ),
+  data = train_new
+)
+
+# Plot OOB error
+plot(st_rf_mod)
+legend('topright', colnames(st_rf_mod$err.rate), col=1:3, fill=1:3)
+
+# Plot variable importance
+importance_output <- importance(st_rf_mod)
+importance <- tibble(
+  var = row.names(importance_output), 
+  imp = round(importance_output[ ,'MeanDecreaseGini'],2)
+)
+
+importance %>% 
+  mutate(var = factor(var, levels = importance %>% arrange(imp) %>% .$var)) %>% 
+  ggplot(aes(x = imp, y = var)) +
+  geom_col() +
+  labs(x = 'Importance', y = 'Variable')
+  
+# 4c. Validation ----
+predicted_values <- valid_new %>% 
+  bind_cols(
+    Prediction = predict(st_rf_mod, valid_new)
+  )
+
+# Confusion matrix and accuracy metrics
+prediction_cm <- confusionMatrix(
+  predicted_values$Prediction, predicted_values$Transported)
+
+prediction_cm$table
+prediction_cm$byClass[['Sensitivity']]
+prediction_cm$byClass[['Specificity']]
+
+# Sub-groups
+#  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
+#  to have done particularly well here
+prediction_vip_cm <- confusionMatrix(
+  (predicted_values %>% filter(VIP))$Prediction, (predicted_values %>% filter(VIP))$Transported
+)
+
+prediction_vip_cm$table
+prediction_vip_cm$byClass[['Sensitivity']]
+prediction_vip_cm$byClass[['Specificity']]
+
+# 5. Prediction ----
+final_output <- test_clean %>% 
+  unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
+  select(PassengerId) %>% 
+  bind_cols(
+    Transported_fct = predict(st_rf_mod, test_clean)
+  ) %>% 
+  mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
+
+nrow(final_output) == 4277 # Size Kaggle expects for this solution
+
+fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv')
+
+# Final accuracy score was 0.79565
 
 ## X. Archive ----
 
