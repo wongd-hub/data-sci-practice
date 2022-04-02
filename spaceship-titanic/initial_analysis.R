@@ -284,7 +284,7 @@ grid.arrange(
 all_wrk_tmp <- all_wrk
 
 # Noting some missing values hidden as empty strings, convert to NAs and count number of missings
-#  In total, 6,364 / 12,970 rows have at least one NA in them; definitely don't want to cut 50% of observations out of the dataset
+#  In total, 6,000 / 12,970 rows have at least one NA in them; definitely don't want to cut 50% of observations out of the dataset
 all_wrk_tmp[rowSums(is.na(all_wrk_tmp %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>% nrow()
 
 # Where do these missing values reside?
@@ -398,7 +398,7 @@ all_wrk %>%
 all_cryo_sub %>% filter(CryoSleep & is.na(lux_spend)) %>% nrow()
 
 # We now replace all NAs in the luxury amenities with 0 where CryoSleep is TRUE
-all_wrk_tmp <- all_wrk_tmp %>% 
+all_wrk_tmp <- all_wrk_tmp %>%
   mutate_at(
     .vars = vars(ShoppingMall, VRDeck, FoodCourt, Spa, RoomService),
     .funs = ~ ifelse(CryoSleep & is.na(.), 0, .)
@@ -407,16 +407,16 @@ all_wrk_tmp <- all_wrk_tmp %>%
 # 3bii. Luxury Amenities part 2 - Non-CryoSleeping Individuals ----
 
 # Viewing relationship to other variables
-# all_wrk_tmp %>% 
-#   filter(!CryoSleep) %>% 
-#   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
+# all_wrk_tmp %>%
+#   filter(!CryoSleep) %>%
+#   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
 #   ggplot(aes(y = lux_spend, x = Deck, fill = Side)) +
 #   geom_boxplot() +
 #   scale_y_continuous(labels = dollar)
 
-# all_wrk_tmp %>% 
-#   filter(!CryoSleep) %>% 
-#   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
+# all_wrk_tmp %>%
+#   filter(!CryoSleep) %>%
+#   mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
 #   ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
 #   geom_boxplot() +
 #   scale_y_continuous(labels = dollar)
@@ -503,7 +503,7 @@ all_wrk %>%
   geom_histogram(position = 'dodge') +
   facet_grid(rows = vars(variable), scales = 'free') +
   theme(legend.position = 'bottom') +
-  scale_x_continuous(limits = c(NA, 10000)) +
+  scale_x_continuous(limits = c(NA, 10000), labels = comma) +
   scale_y_continuous(labels = comma) +
   labs(x = 'Value', y = 'Count', fill = 'Dataset')
 
@@ -695,7 +695,7 @@ identical(
 ) # True, all good.
 
 # Finally, convert features of interest and response into factors unless they're numeric
-all_wrk_tmp <- all_wrk_tmp %>% 
+all_wrk_final <- all_wrk_tmp %>% 
   mutate_at(
     .vars = vars(Transported, CryoSleep, Deck, HomePlanet),
     .funs = factor
@@ -704,8 +704,8 @@ all_wrk_tmp <- all_wrk_tmp %>%
 ## 4. Training ----
 # 4a. Splitting into train/validate/test ----
 # Split back into training and test sets
-test_clean <- all_wrk_tmp %>% filter(dataset == 'test') %>% select(-dataset)
-train_clean <- all_wrk_tmp %>% filter(dataset == 'train') %>% select(-dataset)
+test_clean <- all_wrk_final %>% filter(dataset == 'test') %>% select(-dataset)
+train_clean <- all_wrk_final %>% filter(dataset == 'train') %>% select(-dataset)
 
 # Split train_clean dataset into training and validation sets - ensure people in the 
 #  same group are either in one or the other dataset
@@ -736,7 +736,8 @@ st_rf_mod <- randomForest(
   as.formula(
     paste('Transported', "~", inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = " + "))
   ),
-  data = train_new
+  data = train_new %>% 
+    select_at(vars(Transported, inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = ", ")))
 )
 
 # Plot OOB error
