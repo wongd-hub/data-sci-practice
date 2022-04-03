@@ -41,7 +41,11 @@ library(randomForest) # Random forests
 library(caret)        # Confusion matrices
 
 # Set working directory
-setwd('~/Documents/Projects/kaggle/spaceship-titanic')
+if (.Platform$OS.type == "windows") {
+  setwd('E:/Projects/kaggle-analyses/spaceship-titanic') # PC
+} else {
+  setwd('~/Documents/Projects/kaggle/spaceship-titanic') # Macbook
+}
 ```
 
 We can now load the data-sets that Kaggle provides us and then bind them together.

@@ -22,7 +22,11 @@ invisible({
 
 })
 
-setwd('~/Documents/Projects/kaggle/spaceship-titanic')
+if (.Platform$OS.type == "windows") {
+  setwd('E:/Projects/kaggle-analyses/spaceship-titanic') # PC
+} else {
+  setwd('~/Documents/Projects/kaggle/spaceship-titanic') # Macbook
+}
 
 ## Introduction ----
 # This is a solution to the Kaggle: Spaceship Titanic competition https://www.kaggle.com/competitions/spaceship-titanic/overview
