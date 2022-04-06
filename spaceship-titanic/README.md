@@ -20,8 +20,8 @@ Darren Wong
 -   [5 Training](#5-training)
     -   [5.1 Splitting into train/validation/test
         sets](#51-splitting-into-trainvalidationtest-sets)
-    -   [5.2 Fitting process](#52-fitting-process)
-    -   [5.3 Validation](#53-validation)
+    -   [5.2 Random Forest](#52-random-forest)
+    -   [5.3 XGBoost](#53-xgboost)
 -   [6 Prediction](#6-prediction)
 
 # 1 Introduction
@@ -58,10 +58,15 @@ library(infotheo)     # Mutual information
 library(Information)  # Weight of evidence/information value
 library(mice)         # Missing value prediction
 library(randomForest) # Random forests
-library(caret)        # Confusion matrices
+library(caret)        # Confusion matrices & grid search
+library(xgboost)      # XGBoost ML model
 
 # Set working directory
-setwd('~/Documents/Projects/kaggle/spaceship-titanic')
+if (.Platform$OS.type == "windows") {
+  setwd('E:/Projects/kaggle-analyses/spaceship-titanic') # PC
+} else {
+  setwd('~/Documents/Projects/kaggle/spaceship-titanic') # Macbook
+}
 ```
 
 We can now load the data-sets that Kaggle provides us and then bind them
@@ -89,21 +94,21 @@ glimpse(all)
 
     ## Rows: 12,970
     ## Columns: 15
-    ## $ PassengerId  <chr> "0001_01", "0002_01", "0003_01", "0003_02", "0004_01", "0…
-    ## $ HomePlanet   <chr> "Europa", "Earth", "Europa", "Europa", "Earth", "Earth", …
-    ## $ CryoSleep    <lgl> FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FA…
-    ## $ Cabin        <chr> "B/0/P", "F/0/S", "A/0/S", "A/0/S", "F/1/S", "F/0/P", "F/…
-    ## $ Destination  <chr> "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e…
-    ## $ Age          <dbl> 39, 24, 58, 33, 16, 44, 26, 28, 35, 14, 34, 45, 32, 48, 2…
-    ## $ VIP          <lgl> FALSE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FA…
-    ## $ RoomService  <dbl> 0, 109, 43, 0, 303, 0, 42, 0, 0, 0, 0, 39, 73, 719, 8, 32…
-    ## $ FoodCourt    <dbl> 0, 9, 3576, 1283, 70, 483, 1539, 0, 785, 0, 0, 7295, 0, 1…
-    ## $ ShoppingMall <dbl> 0, 25, 0, 371, 151, 0, 3, 0, 17, 0, NA, 589, 1123, 65, 12…
-    ## $ Spa          <dbl> 0, 549, 6715, 3329, 565, 291, 0, 0, 216, 0, 0, 110, 0, 0,…
-    ## $ VRDeck       <dbl> 0, 44, 49, 193, 2, 0, 0, NA, 0, 0, 0, 124, 113, 24, 7, 0,…
-    ## $ Name         <chr> "Maham Ofracculy", "Juanna Vines", "Altark Susent", "Sola…
-    ## $ Transported  <lgl> FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, …
-    ## $ dataset      <chr> "train", "train", "train", "train", "train", "train", "tr…
+    ## $ PassengerId  <chr> "0001_01", "0002_01", "0003_01", "0003_02", "0004_01", "0~
+    ## $ HomePlanet   <chr> "Europa", "Earth", "Europa", "Europa", "Earth", "Earth", ~
+    ## $ CryoSleep    <lgl> FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FA~
+    ## $ Cabin        <chr> "B/0/P", "F/0/S", "A/0/S", "A/0/S", "F/1/S", "F/0/P", "F/~
+    ## $ Destination  <chr> "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e~
+    ## $ Age          <dbl> 39, 24, 58, 33, 16, 44, 26, 28, 35, 14, 34, 45, 32, 48, 2~
+    ## $ VIP          <lgl> FALSE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FA~
+    ## $ RoomService  <dbl> 0, 109, 43, 0, 303, 0, 42, 0, 0, 0, 0, 39, 73, 719, 8, 32~
+    ## $ FoodCourt    <dbl> 0, 9, 3576, 1283, 70, 483, 1539, 0, 785, 0, 0, 7295, 0, 1~
+    ## $ ShoppingMall <dbl> 0, 25, 0, 371, 151, 0, 3, 0, 17, 0, NA, 589, 1123, 65, 12~
+    ## $ Spa          <dbl> 0, 549, 6715, 3329, 565, 291, 0, 0, 216, 0, 0, 110, 0, 0,~
+    ## $ VRDeck       <dbl> 0, 44, 49, 193, 2, 0, 0, NA, 0, 0, 0, 124, 113, 24, 7, 0,~
+    ## $ Name         <chr> "Maham Ofracculy", "Juanna Vines", "Altark Susent", "Sola~
+    ## $ Transported  <lgl> FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, ~
+    ## $ dataset      <chr> "train", "train", "train", "train", "train", "train", "tr~
 
 ``` r
 # View cardinality of variables
@@ -772,7 +777,7 @@ imput_cryosleep %>%
   pull(pct)
 ```
 
-    ## [1] 0.8647156
+    ## [1] 0.8626333
 
 Pretty close to our previously calculated rate of 85.9%.
 
@@ -930,7 +935,7 @@ all_wrk %>%
 
     ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
 
-    ## Warning: Removed 1732 rows containing non-finite values (stat_bin).
+    ## Warning: Removed 1730 rows containing non-finite values (stat_bin).
 
     ## Warning: Removed 5 rows containing missing values (geom_bar).
 
@@ -1123,6 +1128,36 @@ all_wrk_tmp %>%
     ##         Deck   HomePlanet 
     ##            0            0
 
+Let’s impute the value of age in case we need to use it later:
+
+``` r
+imput_age <- all_wrk_tmp %>% 
+  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  # Convert all character columns to factors
+  mutate_if(
+    is.character,
+    factor
+  ) %>%
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete()
+```
+
+    ## 
+    ##  iter imp variable
+    ##   1   1  Side  Destination  Age  VIP
+    ##   1   2  Side  Destination  Age  VIP
+    ##   1   3  Side  Destination  Age  VIP
+    ##   1   4  Side  Destination  Age  VIP
+    ##   1   5  Side  Destination  Age  VIP
+
+    ## Warning: Number of logged events: 20
+
+``` r
+all_wrk_tmp <- all_wrk_tmp %>% 
+  select(-Age) %>% 
+  bind_cols(imput_age %>% select(Age))
+```
+
 Next, we’ll check that we haven’t lost any people during this process:
 
 ``` r
@@ -1202,7 +1237,7 @@ train_val_split %>%
   mutate(pct = percent(n / sum(n), 0.1))
 ```
 
-    ## # A tibble: 2 × 3
+    ## # A tibble: 2 x 3
     ##   grouping       n pct  
     ##   <chr>      <int> <chr>
     ## 1 train       6100 70.2%
@@ -1214,7 +1249,9 @@ train_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(gro
 valid_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'validation') %>% .$GroupId))
 ```
 
-## 5.2 Fitting process
+## 5.2 Random Forest
+
+### 5.2.1 Fitting process
 
 We’ll input our training set into the random forest model now, then plot
 the out-of-bag (OOB) error across each iteration. A random forest is an
@@ -1227,10 +1264,10 @@ training data that wasn’t used in a given decision tree.
 set.seed(24601)
 
 # As a reminder, here's a list of our features of interest
-( features_of_interest <- inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = " + ") )
+( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + ") )
 ```
 
-    ## [1] "CryoSleep + RoomService + Spa + VRDeck + ShoppingMall + FoodCourt + Deck + HomePlanet"
+    ## [1] "CryoSleep + RoomService + Spa + VRDeck + ShoppingMall + FoodCourt + Deck + HomePlanet + Age"
 
 ``` r
 st_rf_mod <- randomForest(
@@ -1253,10 +1290,10 @@ legend(
 <img src="README_files/figure-gfm/fit-rf-1.png" style="display: block; margin: auto;" />
 
 We can see that at the end of the fitting process, the model has an OOB
-error of 0.2065574. The red and green lines show the error in predicting
+error of 0.2096721. The red and green lines show the error in predicting
 whether a person was not transported and whether a person was
 transported respectively; with the error in predicting whether a person
-was transported generally being lower (0.1701715 vs 0.2439349).
+was transported generally being lower (0.1776124 vs 0.2426055).
 
 We’ll take a quick look at variable importance before moving on to
 checking performance over our validation set.
@@ -1285,7 +1322,7 @@ predicting whether someone was inadvertently teleported or not. The top
 mutual information and information value, albeit reshuffled a little
 bit.
 
-## 5.3 Validation
+### 5.2.2 Validation
 
 We’ll now use this model to predict over our validation set, then we’ll
 check performance metrics such as sensitivity and specificity. Note that
@@ -1309,20 +1346,26 @@ prediction_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE   976  187
-    ##      TRUE    330 1100
+    ##      FALSE   988  197
+    ##      TRUE    318 1090
+
+``` r
+prediction_cm$overall[['Accuracy']]
+```
+
+    ## [1] 0.8013884
 
 ``` r
 prediction_cm$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.7473201
+    ## [1] 0.7565084
 
 ``` r
 prediction_cm$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8547009
+    ## [1] 0.8469308
 
 Our sensitivity and specificity are not too bad, although I’m sure we
 can get better with a more targeted model!
@@ -1343,20 +1386,26 @@ prediction_vip_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE    36    4
-    ##      TRUE      1   14
+    ##      FALSE    35    3
+    ##      TRUE      2   15
+
+``` r
+prediction_vip_cm$overall[['Accuracy']]
+```
+
+    ## [1] 0.9090909
 
 ``` r
 prediction_vip_cm$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.972973
+    ## [1] 0.9459459
 
 ``` r
 prediction_vip_cm$byClass[['Specificity']]
 ```
 
-    ## [1] 0.7777778
+    ## [1] 0.8333333
 
 It’s not too bad. Note the sensitivity is greater than that of the
 aggregate dataset, but the specificity is lower. i.e. We’re more likely
@@ -1364,6 +1413,171 @@ to correctly predict that an individual has been transported to an
 alternate dimension than in the aggregate dataset, but less likely to
 correctly predict that an individual was not transported to an
 alternative dimension.
+
+By now we’ve established a good baseline; let’s see if we can improve on
+this with other models.
+
+## 5.3 XGBoost
+
+Let’s try using an extreme gradient boosting
+([XGBoost](https://towardsdatascience.com/a-beginners-guide-to-xgboost-87f5d4c30ed7))
+model to predict transportation here. XGBoost in an ensemble technique
+where a single weak classifier is progressively turned into a stronger
+one by iteratively predicting the residuals from each new model
+iteration. This approach is understood to control both bias and
+variance, in contrast to the random forest algorithm which utilises
+multiple separate models and bootstrapped aggregation (bagging) which
+only controls for high variance in the model.
+
+XGBoost only works over numeric variables, so we’ll need to one-hot
+encode our factors, we’ll use `caret` to do this:
+
+``` r
+# Define a function pipeline to clean all three data-frames
+xgb_prep <- function(data, iv_threshold = 0.1) {
+  
+  # Bin Age and filter only for variables we're interested in
+  data_tmp <- data %>% 
+    mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+  
+  # Force logical to numeric
+  data_tmp <- data_tmp %>% 
+    mutate_at(
+      .vars = vars(CryoSleep#, Transported
+                   ),
+      .funs = ~ as.numeric(.) - 1
+    ) %>% 
+    # Label needs to be a factor to show this is a classification problem
+    mutate(Transported = as.factor(Transported)) 
+  
+  # One-hot encode Deck and HomePlanet
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  
+  # Add back to main dataset
+  data_tmp <- data_tmp %>% 
+    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    bind_cols(
+      predict(dummy_var_model, newdata = data_tmp)
+    )
+  
+  return(data_tmp)
+  
+}
+
+train_xgb <- xgb_prep(train_new)
+valid_xgb <- xgb_prep(valid_new)
+test_xgb <- xgb_prep(test_clean)
+```
+
+### 5.3.1 Fitting process
+
+XGBoost is engineered for fast implementation, so we can experiment with
+hyperparameters a little easier. Let’s use a method for finding [optimal
+hyperparameters](https://www.kaggle.com/code/prashant111/a-guide-on-xgboost-hyperparameters-tuning/notebook)
+that tends towards the more exhaustive side of things: [the grid
+search](https://www.projectpro.io/recipes/tune-hyper-parameters-grid-search-r).
+We’ll pass vectors of possible values for each hyperparameter to the
+`train` function from the `caret` package. This will in turn train an
+XGBoost model across all possible permutations of these possible values,
+and will then select the model with the lowest Root Mean Squared Error
+(RMSE).
+
+``` r
+# First, define the controls we want to train with; we're choosing 10-fold cross-validation and a grid search
+xgb_control <- trainControl(
+  method = "cv", 
+  number = 5, 
+  search = "grid"
+)
+
+# Next, listing the possible hyper-parameters we'll train over
+#  For hyper-parameters not listed here, we'll use the default value
+xgb_hyp_params <- expand.grid(
+  max_depth = c(3, 4, 5, 6), # Controls the max depth of each tree; higher values = more chance of over-fitting 
+  nrounds = c(1:15) * 50, # Number of trees to go through
+  eta = c(0.01, 0.1, 0.2), # Analogous to learning rate
+  gamma = c(0, 0.01, 0.1), # The minimum loss reduction required to split the next node
+  
+  # Default values for remaining hyper-parameters
+  subsample = c(0.5, 0.75, 1),
+  min_child_weight = 1,
+  colsample_bytree = 0.6
+)
+
+# Unregister any parallel workers
+env <- foreach:::.foreachGlobals
+rm(list=ls(name=env), pos=env)
+
+set.seed(24601)
+
+# Training the model
+st_xgb_mod <- train(
+  Transported ~ ., 
+  data = train_xgb, 
+  method = "xgbTree", 
+  trControl = xgb_control, 
+  tuneGrid = xgb_hyp_params
+)
+```
+
+Taking a quick look at feature importance, everything seems to generally
+align with what we’ve seen previously.
+
+``` r
+xgb.plot.importance(
+  xgb.importance(
+    colnames(train_xgb %>% select(-Transported)), 
+    model = st_xgb_mod$finalModel
+  )
+)
+title('Fig 15. XGBoost Feature Importance')
+```
+
+<img src="README_files/figure-gfm/xgb-imp-1.png" style="display: block; margin: auto;" />
+
+### 5.3.2 Validation
+
+In validating this model, we see that it hasn’t done much better than
+the random forest we set up earlier. Accuracy is up slightly as well as
+specificity, however sensitivity is lower.
+
+``` r
+predicted_values_xgb <- valid_xgb %>% 
+  bind_cols(
+    Prediction = predict(st_xgb_mod, valid_xgb)
+  )
+
+# Confusion matrix and accuracy metrics
+prediction_cm_xgb <- confusionMatrix(
+  predicted_values_xgb$Prediction, predicted_values_xgb$Transported
+)
+
+prediction_cm_xgb$table
+```
+
+    ##           Reference
+    ## Prediction FALSE TRUE
+    ##      FALSE   968  168
+    ##      TRUE    338 1119
+
+``` r
+prediction_cm_xgb$overall[['Accuracy']]
+```
+
+    ## [1] 0.8048592
+
+``` r
+prediction_cm_xgb$byClass[['Sensitivity']]
+```
+
+    ## [1] 0.7411945
+
+``` r
+prediction_cm_xgb$byClass[['Specificity']]
+```
+
+    ## [1] 0.8694639
 
 # 6 Prediction
 
@@ -1386,7 +1600,21 @@ nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
 ``` r
 # Write to a csv
-# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv')
+# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
+
+final_output_xgb <- test_clean %>% 
+  unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
+  select(PassengerId) %>% 
+  bind_cols(
+    Transported_fct = predict(st_xgb_mod, test_xgb)
+  ) %>% 
+  mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
+
+nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
 ```
 
-The final score for this version of the model was 0.79565.
+    ## [1] TRUE
+
+``` r
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191 - small difference, but perhaps due to overfitting?
+```

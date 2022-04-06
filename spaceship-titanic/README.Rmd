@@ -38,7 +38,8 @@ library(infotheo)     # Mutual information
 library(Information)  # Weight of evidence/information value
 library(mice)         # Missing value prediction
 library(randomForest) # Random forests
-library(caret)        # Confusion matrices
+library(caret)        # Confusion matrices & grid search
+library(xgboost)      # XGBoost ML model
 
 # Set working directory
 if (.Platform$OS.type == "windows") {
@@ -786,6 +787,23 @@ all_wrk_tmp %>%
   sapply(function(x) sum(is.na(x)))
 ```
 
+Let's impute the value of age in case we need to use it later:
+```{r rollup-age}
+imput_age <- all_wrk_tmp %>% 
+  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  # Convert all character columns to factors
+  mutate_if(
+    is.character,
+    factor
+  ) %>%
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete()
+
+all_wrk_tmp <- all_wrk_tmp %>% 
+  select(-Age) %>% 
+  bind_cols(imput_age %>% select(Age))
+```
+
 Next, we'll check that we haven't lost any people during this process:
 ```{r rollup-second-check}
 identical(
@@ -854,7 +872,8 @@ train_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(gro
 valid_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'validation') %>% .$GroupId))
 ```
 
-## Fitting process
+## Random Forest
+### Fitting process
 
 We'll input our training set into the random forest model now, then plot the out-of-bag (OOB) error across each iteration. A random forest is an ensemble model consisting of a number of decision trees trained on a random subset (Drawn with replacement) of the available training data. Out-of-bag error simply measures the error of the model on the subset of training data that wasn't used in a given decision tree. 
 
@@ -862,7 +881,7 @@ We'll input our training set into the random forest model now, then plot the out
 set.seed(24601)
 
 # As a reminder, here's a list of our features of interest
-( features_of_interest <- inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = " + ") )
+( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + ") )
 
 st_rf_mod <- randomForest(
   as.formula(
@@ -902,7 +921,7 @@ importance %>%
 
 Feature importance generally agrees with the feature utility metrics used previously that Deck and HomePlanet are less important in predicting whether someone was inadvertently teleported or not. The top 6 features in terms of importance are the same top six that appear using mutual information and information value, albeit reshuffled a little bit.
 
-## Validation
+### Validation
 
 We'll now use this model to predict over our validation set, then we'll check performance metrics such as sensitivity and specificity. Note that the sensitivity is our True Positive Rate, and specificity is our True Negative Rate.
 
@@ -919,6 +938,7 @@ prediction_cm <- confusionMatrix(
 )
 
 prediction_cm$table
+prediction_cm$overall[['Accuracy']]
 prediction_cm$byClass[['Sensitivity']]
 prediction_cm$byClass[['Specificity']]
 ```
@@ -934,11 +954,133 @@ prediction_vip_cm <- confusionMatrix(
 )
 
 prediction_vip_cm$table
+prediction_vip_cm$overall[['Accuracy']]
 prediction_vip_cm$byClass[['Sensitivity']]
 prediction_vip_cm$byClass[['Specificity']]
 ```
 
 It's not too bad. Note the sensitivity is greater than that of the aggregate dataset, but the specificity is lower. i.e. We're more likely to correctly predict that an individual has been transported to an alternate dimension than in the aggregate dataset, but less likely to correctly predict that an individual was not transported to an alternative dimension.
+
+By now we've established a good baseline; let's see if we can improve on this with other models.
+
+## XGBoost
+
+Let’s try using an extreme gradient boosting ([XGBoost](https://towardsdatascience.com/a-beginners-guide-to-xgboost-87f5d4c30ed7)) model to predict transportation here. XGBoost in an ensemble technique where a single weak classifier is progressively turned into a stronger one by iteratively predicting the residuals from each new model iteration. This approach is understood to control both bias and variance, in contrast to the random forest algorithm which utilises multiple separate models and bootstrapped aggregation (bagging) which only controls for high variance in the model.
+
+XGBoost only works over numeric variables, so we'll need to one-hot encode our factors, we'll use `caret` to do this:
+
+```{r xgb-one-hot-encode}
+# Define a function pipeline to clean all three data-frames
+xgb_prep <- function(data, iv_threshold = 0.1) {
+  
+  # Bin Age and filter only for variables we're interested in
+  data_tmp <- data %>% 
+    mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+  
+  # Force logical to numeric
+  data_tmp <- data_tmp %>% 
+    mutate_at(
+      .vars = vars(CryoSleep#, Transported
+                   ),
+      .funs = ~ as.numeric(.) - 1
+    ) %>% 
+    # Label needs to be a factor to show this is a classification problem
+    mutate(Transported = as.factor(Transported)) 
+  
+  # One-hot encode Deck and HomePlanet
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  
+  # Add back to main dataset
+  data_tmp <- data_tmp %>% 
+    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    bind_cols(
+      predict(dummy_var_model, newdata = data_tmp)
+    )
+  
+  return(data_tmp)
+  
+}
+
+train_xgb <- xgb_prep(train_new)
+valid_xgb <- xgb_prep(valid_new)
+test_xgb <- xgb_prep(test_clean)
+```
+
+### Fitting process
+
+XGBoost is engineered for fast implementation, so we can experiment with hyperparameters a little easier. Let’s use a method for finding [optimal hyperparameters](https://www.kaggle.com/code/prashant111/a-guide-on-xgboost-hyperparameters-tuning/notebook) that tends towards the more exhaustive side of things: [the grid search](https://www.projectpro.io/recipes/tune-hyper-parameters-grid-search-r). We’ll pass vectors of possible values for each hyperparameter to the `train` function from the `caret` package. This will in turn train an XGBoost model across all possible permutations of these possible values, and will then select the model with the lowest Root Mean Squared Error (RMSE).
+
+```{r xgb-fitting, message = FALSE, warning = FALSE, results = FALSE, cache = TRUE}
+# First, define the controls we want to train with; we're choosing 10-fold cross-validation and a grid search
+xgb_control <- trainControl(
+  method = "cv", 
+  number = 5, 
+  search = "grid"
+)
+
+# Next, listing the possible hyper-parameters we'll train over
+#  For hyper-parameters not listed here, we'll use the default value
+xgb_hyp_params <- expand.grid(
+  max_depth = c(3, 4, 5, 6), # Controls the max depth of each tree; higher values = more chance of over-fitting 
+  nrounds = c(1:15) * 50, # Number of trees to go through
+  eta = c(0.01, 0.1, 0.2), # Analogous to learning rate
+  gamma = c(0, 0.01, 0.1), # The minimum loss reduction required to split the next node
+  
+  # Default values for remaining hyper-parameters
+  subsample = c(0.5, 0.75, 1),
+  min_child_weight = 1,
+  colsample_bytree = 0.6
+)
+
+# Unregister any parallel workers
+env <- foreach:::.foreachGlobals
+rm(list=ls(name=env), pos=env)
+
+set.seed(24601)
+
+# Training the model
+st_xgb_mod <- train(
+  Transported ~ ., 
+  data = train_xgb, 
+  method = "xgbTree", 
+  trControl = xgb_control, 
+  tuneGrid = xgb_hyp_params
+)
+```
+
+Taking a quick look at feature importance, everything seems to generally align with what we've seen previously.
+
+```{r xgb-imp, fig.align = 'center'}
+xgb.plot.importance(
+  xgb.importance(
+    colnames(train_xgb %>% select(-Transported)), 
+    model = st_xgb_mod$finalModel
+  )
+)
+title('Fig 15. XGBoost Feature Importance')
+```
+
+### Validation
+
+In validating this model, we see that it hasn't done much better than the random forest we set up earlier. Accuracy is up slightly as well as specificity, however sensitivity is lower.
+
+```{r xgb-acc}
+predicted_values_xgb <- valid_xgb %>% 
+  bind_cols(
+    Prediction = predict(st_xgb_mod, valid_xgb)
+  )
+
+# Confusion matrix and accuracy metrics
+prediction_cm_xgb <- confusionMatrix(
+  predicted_values_xgb$Prediction, predicted_values_xgb$Transported
+)
+
+prediction_cm_xgb$table
+prediction_cm_xgb$overall[['Accuracy']]
+prediction_cm_xgb$byClass[['Sensitivity']]
+prediction_cm_xgb$byClass[['Specificity']]
+```
 
 # Prediction
 
@@ -956,7 +1098,17 @@ final_output <- test_clean %>%
 nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
 # Write to a csv
-# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv')
-```
+# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
 
-The final score for this version of the model was 0.79565.
+final_output_xgb <- test_clean %>% 
+  unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
+  select(PassengerId) %>% 
+  bind_cols(
+    Transported_fct = predict(st_xgb_mod, test_xgb)
+  ) %>% 
+  mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
+
+nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
+
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191 - small difference, but perhaps due to overfitting?
+```

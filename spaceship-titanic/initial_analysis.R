@@ -6,7 +6,7 @@ invisible({
     "tidyverse", "data.table", "ggplot2", 
     "scales", "tictoc", "infotheo", 
     "Information", "gridExtra", "mice",
-    "randomForest", "caret"
+    "randomForest", "caret", "xgboost"
   )
 
   if(!all(packages %in% rownames(installed.packages()))) {
@@ -692,6 +692,32 @@ all_wrk_tmp %>%
   select_at(vars(inf_value %>% filter(IV > 0.1) %>% .$Variable)) %>% 
   sapply(function(x) sum(is.na(x))) # All good
 
+# Impute some further variables using mean in case we'll need them later
+imput_age <- all_wrk_tmp %>% 
+  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  # Convert all character columns to factors
+  mutate_if(
+    is.character,
+    factor
+  ) %>%
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete()
+
+all_wrk_tmp <- all_wrk_tmp %>% 
+  select(-Age) %>% 
+  bind_cols(imput_age %>% select(Age))
+  
+imput_homeplanet <- all_wrk_tmp %>% 
+  mutate(
+    HomePlanet_fct = factor(HomePlanet),
+    Deck_fct = factor(Deck),
+    Num_num = as.numeric(Num)
+  ) %>% 
+  select(HomePlanet_fct, Deck_fct, Num_num) %>% 
+  mice(method = 'rf', seed = 24601, maxit = 1) %>% 
+  complete() %>% 
+  mutate(HomePlanet = as.character(HomePlanet_fct)) %>% 
+  select(-ends_with('_fct'), -ends_with('_num'))
 # Check that we haven't lost anyone
 identical(
   all_wrk %>% distinct(GroupId, PassengerId) %>% arrange_all(),
@@ -733,15 +759,15 @@ train_val_split %>%
 train_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'train') %>% .$GroupId))
 valid_new <- train_clean %>% filter(GroupId %in% (train_val_split %>% filter(grouping == 'validation') %>% .$GroupId))
 
-# 4b. Fitting process ----
+# 4b. Random Forest ----
+# 4bi. Fitting process ----
 set.seed(24601)
 
 st_rf_mod <- randomForest(
   as.formula(
-    paste('Transported', "~", inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = " + "))
+    paste('Transported', "~", c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + "))
   ),
-  data = train_new %>% 
-    select_at(vars(Transported, inf_value %>% filter(IV > 0.1) %>% .$Variable %>% paste(collapse = ", ")))
+  data = train_new
 )
 
 # Plot OOB error
@@ -761,7 +787,7 @@ importance %>%
   geom_col() +
   labs(x = 'Importance', y = 'Variable')
   
-# 4c. Validation ----
+# 4bii. Validation ----
 predicted_values <- valid_new %>% 
   bind_cols(
     Prediction = predict(st_rf_mod, valid_new)
@@ -786,6 +812,116 @@ prediction_vip_cm$table
 prediction_vip_cm$byClass[['Sensitivity']]
 prediction_vip_cm$byClass[['Specificity']]
 
+# 4c. XGBoost ----
+# Not XGBoost only works with numeric vectors, we'll modify our three datasets so that factors are one-hot encoded
+#  and logicals are 0-1 (only for the variables of interest though)
+
+# Define a function pipeline to clean all three data-frames
+xgb_prep <- function(data, iv_threshold = 0.1) {
+  
+  # Bin Age and filter only for variables we're interested in
+  data_tmp <- data %>% 
+    mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+  
+  # Force logical to numeric
+  data_tmp <- data_tmp %>% 
+    mutate_at(
+      .vars = vars(CryoSleep#, Transported
+                   ),
+      .funs = ~ as.numeric(.) - 1
+    ) %>% 
+    # Label needs to be a factor to show this is a classification problem
+    mutate(Transported = as.factor(Transported)) 
+  
+  # One-hot encode Deck and HomePlanet
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  
+  # Add back to main dataset
+  data_tmp <- data_tmp %>% 
+    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    bind_cols(
+      predict(dummy_var_model, newdata = data_tmp)
+    )
+  
+  return(data_tmp)
+  
+}
+
+train_xgb <- xgb_prep(train_new)
+valid_xgb <- xgb_prep(valid_new)
+test_xgb <- xgb_prep(test_clean)
+
+# 4ci. Fitting process ----
+# First, define the controls we want to train with; we're choosing 10-fold cross-validation and a grid search
+xgb_control <- trainControl(
+  method = "cv", 
+  number = 5, 
+  search = "grid"
+)
+
+# Next, listing the possible hyperparameters we'll train over
+#  For hyperparameters not listed here, we'll use the default value
+xgb_hyp_params <- expand.grid(
+  max_depth = c(3, 4, 5, 6), # Controls the max depth of each tree; higher values = more chance of overfitting 
+  nrounds = c(1:15) * 50, # Number of trees to go through
+  eta = c(0.01, 0.1, 0.2), # Analogous to learning rate
+  gamma = c(0, 0.01, 0.1), # The minimum loss reduction required to split the next node
+  
+  # Default values for remaining hyperparameters
+  subsample = c(0.5, 0.75, 1),
+  min_child_weight = 1,
+  colsample_bytree = 0.6
+)
+
+# Unregister any parallel workers
+env <- foreach:::.foreachGlobals
+rm(list=ls(name=env), pos=env)
+
+set.seed(24601)
+
+# Training the model
+st_xgb_mod <- train(
+  Transported ~ ., 
+  data = train_xgb, 
+  method = "xgbTree", 
+  trControl = xgb_control, 
+  tuneGrid = xgb_hyp_params
+)
+
+xgb.plot.importance(
+  xgb.importance(
+    colnames(train_xgb %>% select(-Transported)), 
+    model = st_xgb_mod$finalModel
+  )
+)
+
+# 4cii. Validation
+predicted_values_xgb <- valid_new %>% 
+  bind_cols(
+    Prediction = predict(st_xgb_mod, valid_xgb)
+  )
+
+# Confusion matrix and accuracy metrics
+prediction_cm_xgb <- confusionMatrix(
+  predicted_values_xgb$Prediction, predicted_values_xgb$Transported
+)
+
+prediction_cm_xgb$table
+prediction_cm_xgb$byClass[['Sensitivity']]
+prediction_cm_xgb$byClass[['Specificity']]
+
+# Sub-groups
+#  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
+#  to have done particularly well here
+prediction_vip_cm_xgb <- confusionMatrix(
+  (predicted_values_xgb %>% filter(VIP))$Prediction, (predicted_values_xgb %>% filter(VIP))$Transported
+)
+
+prediction_vip_cm_xgb$table
+prediction_vip_cm_xgb$byClass[['Sensitivity']]
+prediction_vip_cm_xgb$byClass[['Specificity']]
+
 # 5. Prediction ----
 final_output <- test_clean %>% 
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
@@ -797,9 +933,19 @@ final_output <- test_clean %>%
 
 nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
-fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv')
+fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
 
-# Final accuracy score was 0.79565
+final_output_xgb <- test_clean %>% 
+  unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
+  select(PassengerId) %>% 
+  bind_cols(
+    Transported_fct = predict(st_xgb_mod, test_xgb)
+  ) %>% 
+  mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
+
+nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
+
+fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191
 
 ## X. Archive ----
 
