@@ -184,7 +184,57 @@ train_grouped <- all_grouped %>% filter(dataset == 'train') %>% select(-dataset)
 #  Looks like transportation rate varies a little based on travelling group size
 table(train_grouped$group_size, train_grouped$Transported) %>% prop.table(1)
 
-#  Determining whether the passenger is female or male using first name might be something for further review
+## 1ai. Deriving gender from first name ----
+# Split the name variable into first and last names, then get unique list of names in dataset to run
+# through genderize.io (doing this externally to the script since we need to limit this to 1k requests per day)
+all_name_split <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right')
+
+all_name_split %>% distinct(first_name) %>% nrow() # 2,884 - 3 days of queries
+
+split_name_list <- all_name_split %>% 
+  distinct(first_name) %>% 
+  split(rep(1:ceiling(nrow(.) / 1000), each = 1000, length.out = nrow(.)))
+
+for (i in 1:length(split_name_list)) {
+  fwrite(split_name_list[[i]], paste0('output/intermediate/', i, '.csv'))
+}
+
+# Check for names that may have been missed by the API
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(
+    bind_rows(
+      fread('other_inputs/1_genderize.csv'),
+      fread('other_inputs/2_genderize.csv'),
+      fread('other_inputs/3_genderize.csv')
+    )
+    , by = 'first_name'
+  ) %>%
+  fwrite('output/intermediate/4.csv')
+
+# Check that all names have now been genderised
+gender_lookup <- bind_rows(
+  fread('other_inputs/1_genderize.csv'),
+  fread('other_inputs/2_genderize.csv'),
+  fread('other_inputs/3_genderize.csv'),
+  fread('other_inputs/4_genderize.csv'),
+)
+
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(gender_lookup, by = 'first_name') %>%
+  nrow() == 0
+
+# Add these back to the main dataset
+all_gendered <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
+
+train_gendered <- all_gendered %>% filter(dataset == 'train')
+
+# Looks like male passengers were transported at a slightly higher rate than female passengers.
+table(train_gendered$gender, train_gendered$Transported) %>% prop.table(1)
 
 ## 1b. EDA - Numeric Variables ----
 # The following numeric variables are available to us
@@ -219,7 +269,9 @@ train_cabin_spl %>%
 all_wrk <- all_cabin_spl %>% 
   separate(PassengerId, c('GroupId', 'PassengerId'), "_") %>% 
   left_join(all_grps, by = 'GroupId') %>% 
-  mutate_all(.funs = ~ na_if(., ""))
+  mutate_all(.funs = ~ na_if(., "")) %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
 
 train_wrk <- all_wrk %>% filter(dataset == 'train') %>% select(-dataset)
 
@@ -229,7 +281,7 @@ train_wrk <- all_wrk %>% filter(dataset == 'train') %>% select(-dataset)
 #   lapply(function(x) mutinformation(., train_wrk$Transported))
 
 mutual_info <- tibble(
-  variable = train_wrk %>% select(-Transported, -GroupId, -Name, -PassengerId, -Num) %>% colnames(),
+  variable = train_wrk %>% select(-Transported, -GroupId, -PassengerId, -Num, -ends_with('_name')) %>% colnames(),
   mutual_info = NA_real_
 )
 
@@ -249,13 +301,12 @@ mutual_info %>%
   geom_col() +
   labs(x = 'Mutual Information', y = 'Variable')
 
-# Note how the following potential candidates for features have low Mutual Information: HomePlanet, Destinatino, Deck, Age
-
+# Note how the following potential candidates for features have low Mutual Information: HomePlanet, Destination, Deck, Age, Gender
 
 # Next, we'll look at Information Value/Weight of Evidence which is related but slightly different: 
 #  https://stats.stackexchange.com/questions/16945/why-do-people-use-the-term-weight-of-evidence-and-how-does-it-differ-from-poi
 train_woe <- train_wrk %>% 
-  select(-GroupId, -Name, -PassengerId) %>% 
+  select(-GroupId, -PassengerId, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -310,6 +361,11 @@ all_wrk_tmp[rowSums(is.na(all_wrk_tmp %>% mutate_all(.funs = ~ na_if(., "")))) >
 # Will be using a mix of imputation and prediction here
 # We'll focus on imputing values for features that we know we'll use in our model, or variables that
 #  are used to impute those features.
+
+# First thing we'll do is change all NA gender values to 'unknown' as this is what the genderize.io API 
+#  applies when it cannot determine a gender.
+all_wrk_tmp <- all_wrk_tmp %>% 
+  replace_na(list(gender = 'unknown'))
 
 # 3a. CryoSleep ----
 #   Individuals in CryoSleep are confined to their Cabin throughout the duration of the interstellar trip,
@@ -694,7 +750,7 @@ all_wrk_tmp %>%
 
 # Impute some further variables using mean in case we'll need them later
 imput_age <- all_wrk_tmp %>% 
-  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  select(-GroupId, -PassengerId, -Transported, -dataset, -Num, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -718,6 +774,7 @@ imput_homeplanet <- all_wrk_tmp %>%
   complete() %>% 
   mutate(HomePlanet = as.character(HomePlanet_fct)) %>% 
   select(-ends_with('_fct'), -ends_with('_num'))
+
 # Check that we haven't lost anyone
 identical(
   all_wrk %>% distinct(GroupId, PassengerId) %>% arrange_all(),
@@ -765,7 +822,7 @@ set.seed(24601)
 
 st_rf_mod <- randomForest(
   as.formula(
-    paste('Transported', "~", c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + "))
+    paste('Transported', "~", c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age', 'gender') %>% paste(collapse = " + "))
   ),
   data = train_new
 )
@@ -813,7 +870,7 @@ prediction_vip_cm$byClass[['Sensitivity']]
 prediction_vip_cm$byClass[['Specificity']]
 
 # 4c. XGBoost ----
-# Not XGBoost only works with numeric vectors, we'll modify our three datasets so that factors are one-hot encoded
+# Note XGBoost only works with numeric vectors, we'll modify our three datasets so that factors are one-hot encoded
 #  and logicals are 0-1 (only for the variables of interest though)
 
 # Define a function pipeline to clean all three data-frames
@@ -822,7 +879,7 @@ xgb_prep <- function(data, iv_threshold = 0.1) {
   # Bin Age and filter only for variables we're interested in
   data_tmp <- data %>% 
     mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
-    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported, gender))
   
   # Force logical to numeric
   data_tmp <- data_tmp %>% 
@@ -835,11 +892,11 @@ xgb_prep <- function(data, iv_threshold = 0.1) {
     mutate(Transported = as.factor(Transported)) 
   
   # One-hot encode Deck and HomePlanet
-  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp + gender, data = data_tmp)
   
   # Add back to main dataset
   data_tmp <- data_tmp %>% 
-    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    select(-Deck, -HomePlanet, -AgeGrp, -gender) %>% 
     bind_cols(
       predict(dummy_var_model, newdata = data_tmp)
     )

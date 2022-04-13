@@ -94,21 +94,21 @@ glimpse(all)
 
     ## Rows: 12,970
     ## Columns: 15
-    ## $ PassengerId  <chr> "0001_01", "0002_01", "0003_01", "0003_02", "0004_01", "0~
-    ## $ HomePlanet   <chr> "Europa", "Earth", "Europa", "Europa", "Earth", "Earth", ~
-    ## $ CryoSleep    <lgl> FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FA~
-    ## $ Cabin        <chr> "B/0/P", "F/0/S", "A/0/S", "A/0/S", "F/1/S", "F/0/P", "F/~
-    ## $ Destination  <chr> "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e~
-    ## $ Age          <dbl> 39, 24, 58, 33, 16, 44, 26, 28, 35, 14, 34, 45, 32, 48, 2~
-    ## $ VIP          <lgl> FALSE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FA~
-    ## $ RoomService  <dbl> 0, 109, 43, 0, 303, 0, 42, 0, 0, 0, 0, 39, 73, 719, 8, 32~
-    ## $ FoodCourt    <dbl> 0, 9, 3576, 1283, 70, 483, 1539, 0, 785, 0, 0, 7295, 0, 1~
-    ## $ ShoppingMall <dbl> 0, 25, 0, 371, 151, 0, 3, 0, 17, 0, NA, 589, 1123, 65, 12~
-    ## $ Spa          <dbl> 0, 549, 6715, 3329, 565, 291, 0, 0, 216, 0, 0, 110, 0, 0,~
-    ## $ VRDeck       <dbl> 0, 44, 49, 193, 2, 0, 0, NA, 0, 0, 0, 124, 113, 24, 7, 0,~
-    ## $ Name         <chr> "Maham Ofracculy", "Juanna Vines", "Altark Susent", "Sola~
-    ## $ Transported  <lgl> FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, ~
-    ## $ dataset      <chr> "train", "train", "train", "train", "train", "train", "tr~
+    ## $ PassengerId  <chr> "0001_01", "0002_01", "0003_01", "0003_02", "0004_01", "0…
+    ## $ HomePlanet   <chr> "Europa", "Earth", "Europa", "Europa", "Earth", "Earth", …
+    ## $ CryoSleep    <lgl> FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE, TRUE, FA…
+    ## $ Cabin        <chr> "B/0/P", "F/0/S", "A/0/S", "A/0/S", "F/1/S", "F/0/P", "F/…
+    ## $ Destination  <chr> "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e", "TRAPPIST-1e…
+    ## $ Age          <dbl> 39, 24, 58, 33, 16, 44, 26, 28, 35, 14, 34, 45, 32, 48, 2…
+    ## $ VIP          <lgl> FALSE, FALSE, TRUE, FALSE, FALSE, FALSE, FALSE, FALSE, FA…
+    ## $ RoomService  <dbl> 0, 109, 43, 0, 303, 0, 42, 0, 0, 0, 0, 39, 73, 719, 8, 32…
+    ## $ FoodCourt    <dbl> 0, 9, 3576, 1283, 70, 483, 1539, 0, 785, 0, 0, 7295, 0, 1…
+    ## $ ShoppingMall <dbl> 0, 25, 0, 371, 151, 0, 3, 0, 17, 0, NA, 589, 1123, 65, 12…
+    ## $ Spa          <dbl> 0, 549, 6715, 3329, 565, 291, 0, 0, 216, 0, 0, 110, 0, 0,…
+    ## $ VRDeck       <dbl> 0, 44, 49, 193, 2, 0, 0, NA, 0, 0, 0, 124, 113, 24, 7, 0,…
+    ## $ Name         <chr> "Maham Ofracculy", "Juanna Vines", "Altark Susent", "Sola…
+    ## $ Transported  <lgl> FALSE, TRUE, FALSE, FALSE, TRUE, TRUE, TRUE, TRUE, TRUE, …
+    ## $ dataset      <chr> "train", "train", "train", "train", "train", "train", "tr…
 
 ``` r
 # View cardinality of variables
@@ -406,6 +406,109 @@ That’s it for the categorical variables, we’ll move on to the numerical
 variables now. *Note to self*: We may be able to infer with questionable
 success the gender of each individual which may be a useful feature.
 
+### 2.1.3 Inferring gender from `Name`
+
+For this application, we’ll use [genderize.io](genderize.io) to infer a
+person’s gender based on their first name. This API works by checking
+which gender was most likely to be the case for given an input first
+name over the data they have gathered from across the web. Note there
+are some caveats to using this approach:
+
+-   There are some names that this API cannot predict genders for; these
+    people are given a gender of `unknown`;
+-   The gender of a first name can change based on both the date of
+    birth and location/country context - this has been ignored for now
+    (noting we do not have access to country of origin data here as
+    well);
+-   This is also currently a naive approach that takes the first word of
+    the `Name` string as the first name of the individual, no
+    considerations have been made for countries that have different name
+    orders (e.g. where family name comes first).
+
+With that being said, to infer genders for the names in the dataset, a
+unique list of first names is extracted and then ran through genderize’s
+CSV tool. This was done as opposed to using native libraries that access
+this API such as [genderizeR](https://github.com/kalimu/genderizeR) or
+[GenderGuesser](https://github.com/eamoncaddigan/GenderGuesser) since
+genderize has a limit of 1000 queries per day and it was just easier to
+run the names through the provided CSV tool manually.
+
+``` r
+# Split the name variable into first and last names, then get unique list of names in data-set to run
+# through genderize.io 
+all_name_split <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right')
+
+all_name_split %>% distinct(first_name) %>% nrow() # 2,884 - 3 days worth of queries
+```
+
+    ## [1] 2884
+
+``` r
+# Split the distinct list of first names into 3 parts, with max 1,000 rows each
+split_name_list <- all_name_split %>% 
+  distinct(first_name) %>% 
+  split(rep(1:ceiling(nrow(.) / 1000), each = 1000, length.out = nrow(.)))
+
+for (i in 1:length(split_name_list)) {
+  fwrite(split_name_list[[i]], paste0('output/intermediate/', i, '.csv'))
+}
+
+#### Run through genderize.io's CSV tool
+
+# Check for names that may have been missed by the API
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(
+    bind_rows(
+      fread('other_inputs/1_genderize.csv'),
+      fread('other_inputs/2_genderize.csv'),
+      fread('other_inputs/3_genderize.csv')
+    )
+    , by = 'first_name'
+  ) %>%
+  fwrite('output/intermediate/4.csv')
+
+# Check that all names have now been genderised
+gender_lookup <- bind_rows(
+  fread('other_inputs/1_genderize.csv'),
+  fread('other_inputs/2_genderize.csv'),
+  fread('other_inputs/3_genderize.csv'),
+  fread('other_inputs/4_genderize.csv'),
+)
+
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(gender_lookup, by = 'first_name') %>%
+  nrow() == 0
+```
+
+    ## [1] TRUE
+
+``` r
+# Add these back to the main dataset
+all_gendered <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
+
+train_gendered <- all_gendered %>% filter(dataset == 'train')
+```
+
+Let’s see quickly if transportation rate tends to vary with gender.
+
+``` r
+table(train_gendered$gender, train_gendered$Transported) %>% prop.table(1)
+```
+
+    ##          
+    ##               FALSE      TRUE
+    ##   female  0.5514810 0.4485190
+    ##   male    0.5074228 0.4925772
+    ##   unknown 0.4186420 0.5813580
+
+It looks like male passengers were transported at a slightly higher rate
+than female passengers.
+
 ## 2.2 Numerical variables
 
 The following are the numeric variables available to us as well as their
@@ -494,7 +597,9 @@ which features we’ll use in our random forest.
 all_wrk <- all_cabin_spl %>% 
   separate(PassengerId, c('GroupId', 'PassengerId'), "_") %>% 
   left_join(all_grps, by = 'GroupId') %>% 
-  mutate_all(.funs = ~ na_if(., ""))
+  mutate_all(.funs = ~ na_if(., "")) %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
 
 # We'll pull the training subset of this data-set since we want to compare values to the target
 train_wrk <- all_wrk %>% filter(dataset == 'train') %>% select(-dataset)
@@ -515,7 +620,7 @@ analysis.
 ``` r
 # Set up a data-frame that tracks variables and their mutual information value which we'll fill in...
 mutual_info <- tibble(
-  variable = train_wrk %>% select(-Transported, -GroupId, -Name, -PassengerId, -Num) %>% colnames(),
+  variable = train_wrk %>% select(-Transported, -GroupId, -PassengerId, -Num, -ends_with('_name')) %>% colnames(),
   mutual_info = NA_real_
 )
 
@@ -567,7 +672,7 @@ to perform this part of this analysis.
 ``` r
 # To do this, we'll need all character variables as factors and logical variables as numerics
 train_woe <- train_wrk %>% 
-  select(-GroupId, -Name, -PassengerId) %>% 
+  select(-GroupId, -PassengerId, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -619,6 +724,11 @@ our data-set.
 # Let's create a working copy of the data-set we have at this point that we can modify at will
 all_wrk_tmp <- all_wrk
 
+# First thing we'll do is change all NA gender values to 'unknown' as this is what the genderize.io API 
+#  applies when it cannot determine a gender.
+all_wrk_tmp <- all_wrk_tmp %>% 
+  replace_na(list(gender = 'unknown'))
+
 # Count number of rows with at least one NA in it
 all_wrk_tmp[rowSums(is.na(all_wrk_tmp %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>% nrow()
 ```
@@ -651,18 +761,20 @@ Where do these missing values reside?
     ## 5           Num  0.02305320
     ## 6          Side  0.02305320
     ## 7           VIP  0.02282190
-    ## 8          Name  0.02266769
-    ## 9     FoodCourt  0.02228219
-    ## 10   HomePlanet  0.02220509
-    ## 11          Spa  0.02189668
-    ## 12  Destination  0.02112567
-    ## 13          Age  0.02081727
-    ## 14       VRDeck  0.02066307
-    ## 15  RoomService  0.02027756
-    ## 16      GroupId  0.00000000
-    ## 17  PassengerId  0.00000000
-    ## 18      dataset  0.00000000
-    ## 19   group_size  0.00000000
+    ## 8    first_name  0.02266769
+    ## 9     last_name  0.02266769
+    ## 10    FoodCourt  0.02228219
+    ## 11   HomePlanet  0.02220509
+    ## 12          Spa  0.02189668
+    ## 13  Destination  0.02112567
+    ## 14          Age  0.02081727
+    ## 15       VRDeck  0.02066307
+    ## 16  RoomService  0.02027756
+    ## 17      GroupId  0.00000000
+    ## 18  PassengerId  0.00000000
+    ## 19      dataset  0.00000000
+    ## 20   group_size  0.00000000
+    ## 21       gender  0.00000000
 
 We’ll be using two strategies to fill these NAs in here. The first being
 imputation where we infer what the missing values should be based on
@@ -777,7 +889,7 @@ imput_cryosleep %>%
   pull(pct)
 ```
 
-    ## [1] 0.8626333
+    ## [1] 0.8647156
 
 Pretty close to our previously calculated rate of 85.9%.
 
@@ -935,7 +1047,7 @@ all_wrk %>%
 
     ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
 
-    ## Warning: Removed 1730 rows containing non-finite values (stat_bin).
+    ## Warning: Removed 1732 rows containing non-finite values (stat_bin).
 
     ## Warning: Removed 5 rows containing missing values (geom_bar).
 
@@ -1132,7 +1244,7 @@ Let’s impute the value of age in case we need to use it later:
 
 ``` r
 imput_age <- all_wrk_tmp %>% 
-  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  select(-GroupId, -PassengerId, -Transported, -dataset, -Num, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -1237,7 +1349,7 @@ train_val_split %>%
   mutate(pct = percent(n / sum(n), 0.1))
 ```
 
-    ## # A tibble: 2 x 3
+    ## # A tibble: 2 × 3
     ##   grouping       n pct  
     ##   <chr>      <int> <chr>
     ## 1 train       6100 70.2%
@@ -1264,10 +1376,10 @@ training data that wasn’t used in a given decision tree.
 set.seed(24601)
 
 # As a reminder, here's a list of our features of interest
-( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + ") )
+( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age', 'gender') %>% paste(collapse = " + ") )
 ```
 
-    ## [1] "CryoSleep + RoomService + Spa + VRDeck + ShoppingMall + FoodCourt + Deck + HomePlanet + Age"
+    ## [1] "CryoSleep + RoomService + Spa + VRDeck + ShoppingMall + FoodCourt + Deck + HomePlanet + Age + gender"
 
 ``` r
 st_rf_mod <- randomForest(
@@ -1290,10 +1402,10 @@ legend(
 <img src="README_files/figure-gfm/fit-rf-1.png" style="display: block; margin: auto;" />
 
 We can see that at the end of the fitting process, the model has an OOB
-error of 0.2096721. The red and green lines show the error in predicting
+error of 0.207377. The red and green lines show the error in predicting
 whether a person was not transported and whether a person was
 transported respectively; with the error in predicting whether a person
-was transported generally being lower (0.1776124 vs 0.2426055).
+was transported generally being lower (0.1743772 vs 0.2412762).
 
 We’ll take a quick look at variable importance before moving on to
 checking performance over our validation set.
@@ -1346,26 +1458,26 @@ prediction_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE   988  197
-    ##      TRUE    318 1090
+    ##      FALSE   984  188
+    ##      TRUE    322 1099
 
 ``` r
 prediction_cm$overall[['Accuracy']]
 ```
 
-    ## [1] 0.8013884
+    ## [1] 0.8033166
 
 ``` r
 prediction_cm$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.7565084
+    ## [1] 0.7534456
 
 ``` r
 prediction_cm$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8469308
+    ## [1] 0.8539239
 
 Our sensitivity and specificity are not too bad, although I’m sure we
 can get better with a more targeted model!
@@ -1386,20 +1498,20 @@ prediction_vip_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE    35    3
-    ##      TRUE      2   15
+    ##      FALSE    36    3
+    ##      TRUE      1   15
 
 ``` r
 prediction_vip_cm$overall[['Accuracy']]
 ```
 
-    ## [1] 0.9090909
+    ## [1] 0.9272727
 
 ``` r
 prediction_vip_cm$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.9459459
+    ## [1] 0.972973
 
 ``` r
 prediction_vip_cm$byClass[['Specificity']]
@@ -1439,24 +1551,23 @@ xgb_prep <- function(data, iv_threshold = 0.1) {
   # Bin Age and filter only for variables we're interested in
   data_tmp <- data %>% 
     mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
-    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported, gender))
   
   # Force logical to numeric
   data_tmp <- data_tmp %>% 
     mutate_at(
-      .vars = vars(CryoSleep#, Transported
-                   ),
+      .vars = vars(CryoSleep),
       .funs = ~ as.numeric(.) - 1
     ) %>% 
     # Label needs to be a factor to show this is a classification problem
     mutate(Transported = as.factor(Transported)) 
   
   # One-hot encode Deck and HomePlanet
-  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp + gender, data = data_tmp)
   
   # Add back to main dataset
   data_tmp <- data_tmp %>% 
-    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    select(-Deck, -HomePlanet, -AgeGrp, -gender) %>% 
     bind_cols(
       predict(dummy_var_model, newdata = data_tmp)
     )
@@ -1539,8 +1650,8 @@ title('Fig 15. XGBoost Feature Importance')
 ### 5.3.2 Validation
 
 In validating this model, we see that it hasn’t done much better than
-the random forest we set up earlier. Accuracy is up slightly as well as
-specificity, however sensitivity is lower.
+the random forest we set up earlier. Accuracy, sensitivity, and
+specificity are around the same as that of the random forest.
 
 ``` r
 predicted_values_xgb <- valid_xgb %>% 
@@ -1558,26 +1669,26 @@ prediction_cm_xgb$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE   968  168
-    ##      TRUE    338 1119
+    ##      FALSE   988  193
+    ##      TRUE    318 1094
 
 ``` r
 prediction_cm_xgb$overall[['Accuracy']]
 ```
 
-    ## [1] 0.8048592
+    ## [1] 0.802931
 
 ``` r
 prediction_cm_xgb$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.7411945
+    ## [1] 0.7565084
 
 ``` r
 prediction_cm_xgb$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8694639
+    ## [1] 0.8500389
 
 # 6 Prediction
 
@@ -1616,5 +1727,5 @@ nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
     ## [1] TRUE
 
 ``` r
-# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191 - small difference, but perhaps due to overfitting?
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79705 - small difference, but perhaps due to overfitting?
 ```

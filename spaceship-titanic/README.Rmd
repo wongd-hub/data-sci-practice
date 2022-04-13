@@ -273,6 +273,77 @@ It looks like transportation rate varies a little bit with group size.
 
 That's it for the categorical variables, we'll move on to the numerical variables now. *Note to self*: We may be able to infer with questionable success the gender of each individual which may be a useful feature.
 
+### Inferring gender from `Name`
+
+For this application, we'll use [genderize.io](genderize.io) to infer a person's gender based on their first name. This API works by checking which gender was most likely to be the case for given an input first name over the data they have gathered from across the web. Note there are some caveats to using this approach:
+
+- There are some names that this API cannot predict genders for; these people are given a gender of `unknown`;
+- The gender of a first name can change based on both the date of birth and location/country context - this has been ignored for now (noting we do not have access to country of origin data here as well);
+- This is also currently a naive approach that takes the first word of the `Name` string as the first name of the individual, no considerations have been made for countries that have different name orders (e.g. where family name comes first).
+
+With that being said, to infer genders for the names in the dataset, a unique list of first names is extracted and then ran through genderize's CSV tool. This was done as opposed to using native libraries that access this API such as [genderizeR](https://github.com/kalimu/genderizeR) or [GenderGuesser](https://github.com/eamoncaddigan/GenderGuesser) since genderize has a limit of 1000 queries per day and it was just easier to run the names through the provided CSV tool manually.
+
+```{r name-inference, message = FALSE}
+# Split the name variable into first and last names, then get unique list of names in data-set to run
+# through genderize.io 
+all_name_split <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right')
+
+all_name_split %>% distinct(first_name) %>% nrow() # 2,884 - 3 days worth of queries
+
+# Split the distinct list of first names into 3 parts, with max 1,000 rows each
+split_name_list <- all_name_split %>% 
+  distinct(first_name) %>% 
+  split(rep(1:ceiling(nrow(.) / 1000), each = 1000, length.out = nrow(.)))
+
+for (i in 1:length(split_name_list)) {
+  fwrite(split_name_list[[i]], paste0('output/intermediate/', i, '.csv'))
+}
+
+#### Run through genderize.io's CSV tool
+
+# Check for names that may have been missed by the API
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(
+    bind_rows(
+      fread('other_inputs/1_genderize.csv'),
+      fread('other_inputs/2_genderize.csv'),
+      fread('other_inputs/3_genderize.csv')
+    )
+    , by = 'first_name'
+  ) %>%
+  fwrite('output/intermediate/4.csv')
+
+# Check that all names have now been genderised
+gender_lookup <- bind_rows(
+  fread('other_inputs/1_genderize.csv'),
+  fread('other_inputs/2_genderize.csv'),
+  fread('other_inputs/3_genderize.csv'),
+  fread('other_inputs/4_genderize.csv'),
+)
+
+all_name_split %>% 
+  distinct(first_name) %>% 
+  anti_join(gender_lookup, by = 'first_name') %>%
+  nrow() == 0
+
+# Add these back to the main dataset
+all_gendered <- all_grouped %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
+
+train_gendered <- all_gendered %>% filter(dataset == 'train')
+```
+
+Let's see quickly if transportation rate tends to vary with gender.
+
+```{r name-infer-xtab}
+table(train_gendered$gender, train_gendered$Transported) %>% prop.table(1)
+```
+
+It looks like male passengers were transported at a slightly higher rate than female passengers.
+
 ## Numerical variables
 
 The following are the numeric variables available to us as well as their quartiles and number of NAs present.
@@ -322,7 +393,9 @@ While we've developed hypotheses regarding which features may have value in pred
 all_wrk <- all_cabin_spl %>% 
   separate(PassengerId, c('GroupId', 'PassengerId'), "_") %>% 
   left_join(all_grps, by = 'GroupId') %>% 
-  mutate_all(.funs = ~ na_if(., ""))
+  mutate_all(.funs = ~ na_if(., "")) %>% 
+  separate(Name, c("first_name", "last_name"), extra = 'merge', fill = 'right') %>% 
+  left_join(gender_lookup, by = 'first_name')
 
 # We'll pull the training subset of this data-set since we want to compare values to the target
 train_wrk <- all_wrk %>% filter(dataset == 'train') %>% select(-dataset)
@@ -337,7 +410,7 @@ We'll be using the `infotheo` package to perform this part of the analysis.
 ```{r fi-mi, fig.align = 'center', warning = FALSE, message = FALSE}
 # Set up a data-frame that tracks variables and their mutual information value which we'll fill in...
 mutual_info <- tibble(
-  variable = train_wrk %>% select(-Transported, -GroupId, -Name, -PassengerId, -Num) %>% colnames(),
+  variable = train_wrk %>% select(-Transported, -GroupId, -PassengerId, -Num, -ends_with('_name')) %>% colnames(),
   mutual_info = NA_real_
 )
 
@@ -371,7 +444,7 @@ Now that we have a ranking, let's see if we can validate these and also determin
 ```{r fi-woe, warning = FALSE, message = FALSE, error = TRUE}
 # To do this, we'll need all character variables as factors and logical variables as numerics
 train_woe <- train_wrk %>% 
-  select(-GroupId, -Name, -PassengerId) %>% 
+  select(-GroupId, -PassengerId, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -412,6 +485,11 @@ Now that we know what our data looks like and what features we might like to foc
 ```{r na-setup}
 # Let's create a working copy of the data-set we have at this point that we can modify at will
 all_wrk_tmp <- all_wrk
+
+# First thing we'll do is change all NA gender values to 'unknown' as this is what the genderize.io API 
+#  applies when it cannot determine a gender.
+all_wrk_tmp <- all_wrk_tmp %>% 
+  replace_na(list(gender = 'unknown'))
 
 # Count number of rows with at least one NA in it
 all_wrk_tmp[rowSums(is.na(all_wrk_tmp %>% mutate_all(.funs = ~ na_if(., "")))) > 0, ] %>% nrow()
@@ -790,7 +868,7 @@ all_wrk_tmp %>%
 Let's impute the value of age in case we need to use it later:
 ```{r rollup-age}
 imput_age <- all_wrk_tmp %>% 
-  select(-GroupId, -PassengerId, -Name, -Transported, -dataset, -Num) %>% 
+  select(-GroupId, -PassengerId, -Transported, -dataset, -Num, -ends_with('_name')) %>% 
   # Convert all character columns to factors
   mutate_if(
     is.character,
@@ -881,7 +959,7 @@ We'll input our training set into the random forest model now, then plot the out
 set.seed(24601)
 
 # As a reminder, here's a list of our features of interest
-( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age') %>% paste(collapse = " + ") )
+( features_of_interest <- c(inf_value %>% filter(IV > 0.1) %>% .$Variable, 'Age', 'gender') %>% paste(collapse = " + ") )
 
 st_rf_mod <- randomForest(
   as.formula(
@@ -976,24 +1054,23 @@ xgb_prep <- function(data, iv_threshold = 0.1) {
   # Bin Age and filter only for variables we're interested in
   data_tmp <- data %>% 
     mutate(AgeGrp = cut(Age, breaks = 10 * c(-1:10))) %>% 
-    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported))
+    select_at(vars(inf_value %>% filter(IV > iv_threshold) %>% .$Variable, AgeGrp, Transported, gender))
   
   # Force logical to numeric
   data_tmp <- data_tmp %>% 
     mutate_at(
-      .vars = vars(CryoSleep#, Transported
-                   ),
+      .vars = vars(CryoSleep),
       .funs = ~ as.numeric(.) - 1
     ) %>% 
     # Label needs to be a factor to show this is a classification problem
     mutate(Transported = as.factor(Transported)) 
   
   # One-hot encode Deck and HomePlanet
-  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp, data = data_tmp)
+  dummy_var_model <- dummyVars(~ Deck + HomePlanet + AgeGrp + gender, data = data_tmp)
   
   # Add back to main dataset
   data_tmp <- data_tmp %>% 
-    select(-Deck, -HomePlanet, -AgeGrp) %>% 
+    select(-Deck, -HomePlanet, -AgeGrp, -gender) %>% 
     bind_cols(
       predict(dummy_var_model, newdata = data_tmp)
     )
@@ -1063,7 +1140,7 @@ title('Fig 15. XGBoost Feature Importance')
 
 ### Validation
 
-In validating this model, we see that it hasn't done much better than the random forest we set up earlier. Accuracy is up slightly as well as specificity, however sensitivity is lower.
+In validating this model, we see that it hasn't done much better than the random forest we set up earlier. Accuracy, sensitivity, and specificity are around the same as that of the random forest.
 
 ```{r xgb-acc}
 predicted_values_xgb <- valid_xgb %>% 
@@ -1110,5 +1187,5 @@ final_output_xgb <- test_clean %>%
 
 nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
 
-# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191 - small difference, but perhaps due to overfitting?
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79705 - small difference, but perhaps due to overfitting?
 ```
