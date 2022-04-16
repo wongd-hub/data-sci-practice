@@ -999,6 +999,8 @@ importance %>%
 
 Feature importance generally agrees with the feature utility metrics used previously that Deck and HomePlanet are less important in predicting whether someone was inadvertently teleported or not. The top 6 features in terms of importance are the same top six that appear using mutual information and information value, albeit reshuffled a little bit.
 
+Let's check the Area under the Curve (AUC) for this model, which can be interpreted as 
+
 ### Validation
 
 We'll now use this model to predict over our validation set, then we'll check performance metrics such as sensitivity and specificity. Note that the sensitivity is our True Positive Rate, and specificity is our True Negative Rate.

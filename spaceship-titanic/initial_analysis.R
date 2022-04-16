@@ -4,7 +4,7 @@ invisible({
   # Packages to load are found in the character vector below
   packages <- c(
     "tidyverse", "data.table", "ggplot2", 
-    "scales", "tictoc", "infotheo", 
+    "scales", "tictoc", "infotheo", "ROCR",
     "Information", "gridExtra", "mice",
     "randomForest", "caret", "xgboost"
   )
@@ -858,6 +858,24 @@ prediction_cm$table
 prediction_cm$byClass[['Sensitivity']]
 prediction_cm$byClass[['Specificity']]
 
+# AUC
+performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]] # 0.8586274
+
+# Optimal cut-off
+( st_rf_cutoff <- performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ), 
+  measure = "cost"
+)@cutoffs[[1]][which.min(cost.perf@y.values[[1]])] )
+
 # Sub-groups
 #  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
 #  to have done particularly well here
@@ -953,7 +971,7 @@ xgb.plot.importance(
   )
 )
 
-# 4cii. Validation
+# 4cii. Validation ----
 predicted_values_xgb <- valid_new %>% 
   bind_cols(
     Prediction = predict(st_xgb_mod, valid_xgb)
@@ -967,6 +985,15 @@ prediction_cm_xgb <- confusionMatrix(
 prediction_cm_xgb$table
 prediction_cm_xgb$byClass[['Sensitivity']]
 prediction_cm_xgb$byClass[['Specificity']]
+
+# AUC
+performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]] # 0.911246
 
 # Sub-groups
 #  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
