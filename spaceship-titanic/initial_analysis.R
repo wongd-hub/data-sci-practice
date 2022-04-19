@@ -205,9 +205,9 @@ all_name_split %>%
   distinct(first_name) %>% 
   anti_join(
     bind_rows(
-      fread('other_inputs/1_genderize.csv'),
-      fread('other_inputs/2_genderize.csv'),
-      fread('other_inputs/3_genderize.csv')
+      fread('other-inputs/1_genderize.csv'),
+      fread('other-inputs/2_genderize.csv'),
+      fread('other-inputs/3_genderize.csv')
     )
     , by = 'first_name'
   ) %>%
@@ -215,10 +215,10 @@ all_name_split %>%
 
 # Check that all names have now been genderised
 gender_lookup <- bind_rows(
-  fread('other_inputs/1_genderize.csv'),
-  fread('other_inputs/2_genderize.csv'),
-  fread('other_inputs/3_genderize.csv'),
-  fread('other_inputs/4_genderize.csv'),
+  fread('other-inputs/1_genderize.csv'),
+  fread('other-inputs/2_genderize.csv'),
+  fread('other-inputs/3_genderize.csv'),
+  fread('other-inputs/4_genderize.csv'),
 )
 
 all_name_split %>% 
@@ -868,13 +868,15 @@ performance(
 )@y.values[[1]] # 0.8586274
 
 # Optimal cut-off
-( st_rf_cutoff <- performance(
+st_rf_cutoff_obj <- performance(
   prediction(
     predict(st_rf_mod, type = "prob")[,2], 
     as.numeric(train_new$Transported) - 1
   ), 
   measure = "cost"
-)@cutoffs[[1]][which.min(cost.perf@y.values[[1]])] )
+)
+
+st_rf_cutoff_obj@cutoffs[which.min(cost.perf@y.values[[1]])]
 
 # Sub-groups
 #  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model

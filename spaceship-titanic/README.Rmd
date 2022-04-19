@@ -307,9 +307,9 @@ all_name_split %>%
   distinct(first_name) %>% 
   anti_join(
     bind_rows(
-      fread('other_inputs/1_genderize.csv'),
-      fread('other_inputs/2_genderize.csv'),
-      fread('other_inputs/3_genderize.csv')
+      fread('other-inputs/1_genderize.csv'),
+      fread('other-inputs/2_genderize.csv'),
+      fread('other-inputs/3_genderize.csv')
     )
     , by = 'first_name'
   ) %>%
@@ -317,10 +317,10 @@ all_name_split %>%
 
 # Check that all names have now been genderised
 gender_lookup <- bind_rows(
-  fread('other_inputs/1_genderize.csv'),
-  fread('other_inputs/2_genderize.csv'),
-  fread('other_inputs/3_genderize.csv'),
-  fread('other_inputs/4_genderize.csv'),
+  fread('other-inputs/1_genderize.csv'),
+  fread('other-inputs/2_genderize.csv'),
+  fread('other-inputs/3_genderize.csv'),
+  fread('other-inputs/4_genderize.csv'),
 )
 
 all_name_split %>% 
