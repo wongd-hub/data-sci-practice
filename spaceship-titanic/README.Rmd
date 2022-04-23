@@ -38,8 +38,9 @@ library(infotheo)     # Mutual information
 library(Information)  # Weight of evidence/information value
 library(mice)         # Missing value prediction
 library(randomForest) # Random forests
-library(caret)        # Confusion matrices & grid search
 library(xgboost)      # XGBoost ML model
+library(caret)        # Confusion matrices & grid search
+library(ROCR)         # Calculation of AUC and optimal classification thresholds
 
 # Set working directory
 if (.Platform$OS.type == "windows") {
@@ -439,9 +440,9 @@ Now that we have a ranking, let's see if we can validate these and also determin
 
 ## Weight of evidence
 
-[Weight of evidence](https://www.listendata.com/2015/03/weight-of-evidence-woe-and-information.html) (W) allows us to rank feature importance, and also provides a benchmark above which we can say the feature is likely to be useful to any prediction efforts we'll be making. WOE is calculated across a feature column and the scores then aggregated into a value called an Information Value (IV). In general, an IV that is greater than 0.1 indicates at least medium predictive power, we'll be using this as our baseline IV cutoff for feature importance. We'll be using the `Information` package to perform this part of this analysis.
+[Weight of evidence](https://www.listendata.com/2015/03/weight-of-evidence-woe-and-information.html) (WOE) allows us to rank feature importance, and also provides a benchmark above which we can say the feature is likely to be useful to any prediction efforts we'll be making. WOE is calculated across a feature column and the scores then aggregated into a value called an Information Value (IV). In general, an IV that is greater than 0.1 indicates at least medium predictive power, we'll be using this as our baseline IV cutoff for feature importance. We'll be using the `Information` package to perform this part of this analysis.
 
-```{r fi-woe, warning = FALSE, message = FALSE, error = TRUE}
+```{r fi-woe, message = FALSE, warning = FALSE, results = FALSE}
 # To do this, we'll need all character variables as factors and logical variables as numerics
 train_woe <- train_wrk %>% 
   select(-GroupId, -PassengerId, -ends_with('_name')) %>% 
@@ -563,7 +564,7 @@ all_wrk_tmp <- all_wrk_tmp %>%
 
 For `CryoSleep` where luxury spend isn't greater than zero, we'll use the `mice` package to predict missing values with random forests.
 
-```{r na-cryosleep-mice}
+```{r na-cryosleep-mice, message = FALSE, warning = FALSE, results = FALSE}
 # Create imputation
 imput_cryosleep <- all_wrk_tmp %>%
   mutate(
@@ -648,30 +649,28 @@ all_wrk_tmp <- all_wrk_tmp %>%
 Looking through the distributions of other variables vs. luxury spend, there aren't many convincing relationships we can draw on to impute missing values for individuals who aren't cryosleeping. However, there are some patterns visible in the data:
 
 ```{r lux-noncryosleepers, fig.align = 'center', warning = FALSE, fig.width = 8}
-grid.arrange(
-  all_wrk_tmp %>%
-    filter(!CryoSleep) %>%
-    mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
-    ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
-    geom_boxplot() +
-    scale_y_continuous(labels = dollar) +
-    labs(x = 'Destination', y = 'Total Luxury Spend', title = 'Fig 8. Luxury spend vs. \nDestination, Home planet & '),
-  all_wrk_tmp %>%
-    filter(!CryoSleep) %>%
-    mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
-    mutate(Num = as.numeric(Num)) %>%
-    ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
-    geom_point() +
-    scale_y_continuous(labels = dollar) +
-    scale_x_continuous(labels = comma) +
-    labs(x = 'Number', y = element_blank(), title = 'Luxury spend vs. \nRoom number, Home planet'),
-  ncol = 2
-)
+all_wrk_tmp %>%
+  filter(!CryoSleep) %>%
+  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
+  ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
+  geom_boxplot() +
+  scale_y_continuous(labels = dollar) +
+  labs(x = 'Destination', y = 'Total Luxury Spend', title = 'Fig 8a. Luxury spend vs. Destination, Home Planet')
+
+all_wrk_tmp %>%
+  filter(!CryoSleep) %>%
+  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
+  mutate(Num = as.numeric(Num)) %>%
+  ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
+  geom_point() +
+  scale_y_continuous(labels = dollar) +
+  scale_x_continuous(labels = comma) +
+  labs(x = 'Number', y = element_blank(), title = 'Fig 8b. Luxury spend vs. Room number, Home Planet')
 ```
 
 For now, we'll predict the remaining luxury spend values on some variables such as HomePlanet, Destination, and Deck - variables that seem to have some association with luxury spend.
 
-```{r lux-restofset}
+```{r lux-restofset, message = FALSE, warning = FALSE, results = FALSE}
 # Pull out examples where CryoSleep is not TRUE
 all_wrk_noncryo <- all_wrk_tmp %>% filter(!CryoSleep | is.na(CryoSleep))
   
@@ -689,7 +688,7 @@ imput_lux_spend <- all_wrk_noncryo %>%
 
 Finally, we'll add the predicted values back to the dataset, and compare the distributions of predicted/imputed values vs. the original dataset.
 
-```{r lux-final, fig.align = 'center'}
+```{r lux-final, fig.align = 'center', message = FALSE, warning = FALSE, results = FALSE}
 all_wrk_tmp <- all_wrk_tmp %>% 
   # Filter out !CryoSleep and is.na(CryoSleep) as they're contained in all_wrk_noncryo
   filter(CryoSleep) %>% 
@@ -768,7 +767,7 @@ all_wrk_tmp <- all_wrk_tmp %>%
 
 Finally, we know that there is some association between `HomePlanet` and room number based on information from the last section, so we'll use this as one of the values used to predict the remaining NA values:
 
-```{r hp-impute, fig.align = 'center'}
+```{r hp-impute, fig.align = 'center', message = FALSE, warning = FALSE, results = FALSE}
 imput_homeplanet <- all_wrk_tmp %>% 
   mutate(
     HomePlanet_fct = factor(HomePlanet),
@@ -817,7 +816,7 @@ all_wrk %>%
 
 There isn't much to go on for imputing missing `Deck` values, except for the fact that people within the same travel group tend to stay on decks are in close vicinity to each other.
 
-```{r de-groups, fig.align = 'center', warning = FALSE}
+```{r de-groups, fig.align = 'center', message = FALSE, warning = FALSE, results = FALSE}
 # Get number of people in each group and where they're located
 all_wrk_grps <- all_wrk_tmp %>% 
   filter(group_size > 1) %>% 
@@ -866,7 +865,7 @@ all_wrk_tmp %>%
 ```
 
 Let's impute the value of age in case we need to use it later:
-```{r rollup-age}
+```{r rollup-age, message = FALSE, warning = FALSE, results = FALSE}
 imput_age <- all_wrk_tmp %>% 
   select(-GroupId, -PassengerId, -Transported, -dataset, -Num, -ends_with('_name')) %>% 
   # Convert all character columns to factors
@@ -999,17 +998,47 @@ importance %>%
 
 Feature importance generally agrees with the feature utility metrics used previously that Deck and HomePlanet are less important in predicting whether someone was inadvertently teleported or not. The top 6 features in terms of importance are the same top six that appear using mutual information and information value, albeit reshuffled a little bit.
 
-Let's check the Area under the Curve (AUC) for this model, which can be interpreted as 
+Let's check the Area under the Curve (AUC) for this model, which can be interpreted as the probability that the model ranks a randomly drawn positive example (i.e. `TRUE`) correctly before a randomly drawn negative (`FALSE`). An AUC of 0.5 suggests that the model is no better than a model that randomly classifies the examples it comes across, whereas an AUC of 1.0 suggests that the model is a perfect classifier.
+
+```{r rf-auc}
+performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]]
+```
+
+The Receiver Operating Curve from which the Area under the Curve is derived can also provide us with the optimal cutoff for use as a threshold when classifying examples.
+
+```{r rf-cutoff}
+st_rf_cutoff_obj <- performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ), 
+  measure = "cost"
+)
+
+( st_rf_optimal_cutoff <- st_rf_cutoff_obj@x.values[[1]][which.min(st_rf_cutoff_obj@y.values[[1]])][[1]] ) 
+```
 
 ### Validation
 
-We'll now use this model to predict over our validation set, then we'll check performance metrics such as sensitivity and specificity. Note that the sensitivity is our True Positive Rate, and specificity is our True Negative Rate.
+We'll now use this model to predict over our validation set, then we'll check performance metrics such as accuracy, sensitivity, and specificity. Note that, in this case, sensitivity is the ability of the model to correctly identify people who have been transported, and specificity which is the ability of the model to correctly identify someone who has not been transported.
 
 ```{r val}
 # Predict values and bind to the validation data-frame
 predicted_values <- valid_new %>% 
   bind_cols(
-    Prediction = predict(st_rf_mod, valid_new)
+    Prediction_prob = predict(st_rf_mod, valid_new, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    # Utilising the optimal cutoff derived earlier:
+    Prediction = ifelse(Prediction_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
   )
 
 # Confusion matrix and accuracy metrics
@@ -1023,7 +1052,7 @@ prediction_cm$byClass[['Sensitivity']]
 prediction_cm$byClass[['Specificity']]
 ```
 
-Our sensitivity and specificity are not too bad, although I'm sure we can get better with a more targeted model!
+Accuracy, sensitivity, and specificity all look okay here, but it should be noted these do not provide the whole picture. Accuracy in particular can be quite misleading when there are substantial class imbalances in the underlying dataset such as when modelling rare events like the prevalence of rare diseases. The sensitivity and specificity measures aim to ameliorate this issue. AUC also tends to be more holistic, assessing the model across all possible classification thresholds.
 
 Before using this model to predict over the test set, let's take a look at the VIP sub-group. Since they make up a small portion of total passengers, we aren't expecting the model to have predicted their transportation rate with as much accuracy as the rest of the passengers.
 
@@ -1045,7 +1074,7 @@ By now we've established a good baseline; let's see if we can improve on this wi
 
 ## XGBoost
 
-Let’s try using an extreme gradient boosting ([XGBoost](https://towardsdatascience.com/a-beginners-guide-to-xgboost-87f5d4c30ed7)) model to predict transportation here. XGBoost in an ensemble technique where a single weak classifier is progressively turned into a stronger one by iteratively predicting the residuals from each new model iteration. This approach is understood to control both bias and variance, in contrast to the random forest algorithm which utilises multiple separate models and bootstrapped aggregation (bagging) which only controls for high variance in the model.
+Let’s try using an extreme gradient boosting ([XGBoost](https://towardsdatascience.com/a-beginners-guide-to-xgboost-87f5d4c30ed7)) model to predict transportation here. XGBoost in an ensemble technique where a single weak classifier is progressively turned into a stronger one by iteratively predicting the residuals from each new model iteration. This approach is understood to control both bias and variance, in contrast to the random forest algorithm which utilises multiple separate models and bootstrapped aggregation (bagging) which mainly controls for high variance in the model.
 
 XGBoost only works over numeric variables, so we'll need to one-hot encode our factors, we'll use `caret` to do this:
 
@@ -1140,14 +1169,43 @@ xgb.plot.importance(
 title('Fig 15. XGBoost Feature Importance')
 ```
 
+Finally - before we go on to validation, let's check the AUC and find the optimal classification threshold for this model.
+
+```{r xgb-auc-cutoff}
+# AUC
+performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]]
+
+# Optimal cut-off
+st_xgb_cutoff_obj <- performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_xgb$Transported) - 1
+  ), 
+  measure = "cost"
+)
+
+( st_xgb_optimal_cutoff <- st_xgb_cutoff_obj@x.values[[1]][which.min(st_xgb_cutoff_obj@y.values[[1]])][[1]] )
+```
+
 ### Validation
 
-In validating this model, we see that it hasn't done much better than the random forest we set up earlier. Accuracy, sensitivity, and specificity are around the same as that of the random forest.
+In validating this model, we see that its done a little better than the random forest we set up earlier. Accuracy, sensitivity, and specificity are all slightly higher than that of the random forest model.
 
 ```{r xgb-acc}
-predicted_values_xgb <- valid_xgb %>% 
+predicted_values_xgb <- valid_new %>% 
   bind_cols(
-    Prediction = predict(st_xgb_mod, valid_xgb)
+    Prediction_prob = predict(st_xgb_mod, valid_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Prediction = ifelse(Prediction_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
   )
 
 # Confusion matrix and accuracy metrics
@@ -1170,24 +1228,34 @@ final_output <- test_clean %>%
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_rf_mod, test_clean)
+    Transported_prob = predict(st_rf_mod, test_clean, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
 nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
 # Write to a csv
-# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
+# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79378
 
 final_output_xgb <- test_clean %>% 
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_xgb_mod, test_xgb)
+    Transported_prob = predict(st_xgb_mod, test_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
-nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
+nrow(final_output_xgb) == 4277
 
-# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79705 - small difference, but perhaps due to overfitting?
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79588
 ```

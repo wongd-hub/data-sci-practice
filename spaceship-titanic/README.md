@@ -58,8 +58,9 @@ library(infotheo)     # Mutual information
 library(Information)  # Weight of evidence/information value
 library(mice)         # Missing value prediction
 library(randomForest) # Random forests
-library(caret)        # Confusion matrices & grid search
 library(xgboost)      # XGBoost ML model
+library(caret)        # Confusion matrices & grid search
+library(ROCR)         # Calculation of AUC and optimal classification thresholds
 
 # Set working directory
 if (.Platform$OS.type == "windows") {
@@ -461,9 +462,9 @@ all_name_split %>%
   distinct(first_name) %>% 
   anti_join(
     bind_rows(
-      fread('other_inputs/1_genderize.csv'),
-      fread('other_inputs/2_genderize.csv'),
-      fread('other_inputs/3_genderize.csv')
+      fread('other-inputs/1_genderize.csv'),
+      fread('other-inputs/2_genderize.csv'),
+      fread('other-inputs/3_genderize.csv')
     )
     , by = 'first_name'
   ) %>%
@@ -471,10 +472,10 @@ all_name_split %>%
 
 # Check that all names have now been genderised
 gender_lookup <- bind_rows(
-  fread('other_inputs/1_genderize.csv'),
-  fread('other_inputs/2_genderize.csv'),
-  fread('other_inputs/3_genderize.csv'),
-  fread('other_inputs/4_genderize.csv'),
+  fread('other-inputs/1_genderize.csv'),
+  fread('other-inputs/2_genderize.csv'),
+  fread('other-inputs/3_genderize.csv'),
+  fread('other-inputs/4_genderize.csv'),
 )
 
 all_name_split %>% 
@@ -660,14 +661,14 @@ determine a cut-off for usefulness using weight of evidence analysis.
 
 [Weight of
 evidence](https://www.listendata.com/2015/03/weight-of-evidence-woe-and-information.html)
-(W) allows us to rank feature importance, and also provides a benchmark
-above which we can say the feature is likely to be useful to any
-prediction efforts we’ll be making. WOE is calculated across a feature
-column and the scores then aggregated into a value called an Information
-Value (IV). In general, an IV that is greater than 0.1 indicates at
-least medium predictive power, we’ll be using this as our baseline IV
-cutoff for feature importance. We’ll be using the `Information` package
-to perform this part of this analysis.
+(WOE) allows us to rank feature importance, and also provides a
+benchmark above which we can say the feature is likely to be useful to
+any prediction efforts we’ll be making. WOE is calculated across a
+feature column and the scores then aggregated into a value called an
+Information Value (IV). In general, an IV that is greater than 0.1
+indicates at least medium predictive power, we’ll be using this as our
+baseline IV cutoff for feature importance. We’ll be using the
+`Information` package to perform this part of this analysis.
 
 ``` r
 # To do this, we'll need all character variables as factors and logical variables as numerics
@@ -684,8 +685,6 @@ train_woe <- train_wrk %>%
 # Calculate Weight of Evidence over each column, then Information Value
 inf_value <- create_infotables(data = train_woe, y = "Transported", bins = 10)$Summary
 ```
-
-    ## [1] "Variable Num was removed because it is a non-numeric variable with >1000 categories"
 
 With the Information Values calculated, let’s then compare the order of
 variables with those produced by the mutual information analysis:
@@ -867,17 +866,7 @@ imput_cryosleep <- all_wrk_tmp %>%
   complete() %>% 
   mutate(CryoSleep = as.logical(CryoSleep)) %>% 
   select(-ends_with('_fct'))
-```
 
-    ## 
-    ##  iter imp variable
-    ##   1   1  CryoSleep  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   2  CryoSleep  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   3  CryoSleep  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   4  CryoSleep  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   5  CryoSleep  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-
-``` r
 # Let's quickly check the percentage of passengers who spend 0 on luxury amenities and who were also in cryosleep to compare against what we calculated earlier
 imput_cryosleep %>% 
   mutate(lux_spend_keepnas = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>% 
@@ -888,8 +877,6 @@ imput_cryosleep %>%
   filter(CryoSleep) %>% 
   pull(pct)
 ```
-
-    ## [1] 0.8647156
 
 Pretty close to our previously calculated rate of 85.9%.
 
@@ -959,28 +946,30 @@ missing values for individuals who aren’t cryosleeping. However, there
 are some patterns visible in the data:
 
 ``` r
-grid.arrange(
-  all_wrk_tmp %>%
-    filter(!CryoSleep) %>%
-    mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
-    ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
-    geom_boxplot() +
-    scale_y_continuous(labels = dollar) +
-    labs(x = 'Destination', y = 'Total Luxury Spend', title = 'Fig 8. Luxury spend vs. \nDestination, Home planet & '),
-  all_wrk_tmp %>%
-    filter(!CryoSleep) %>%
-    mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
-    mutate(Num = as.numeric(Num)) %>%
-    ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
-    geom_point() +
-    scale_y_continuous(labels = dollar) +
-    scale_x_continuous(labels = comma) +
-    labs(x = 'Number', y = element_blank(), title = 'Luxury spend vs. \nRoom number, Home planet'),
-  ncol = 2
-)
+all_wrk_tmp %>%
+  filter(!CryoSleep) %>%
+  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
+  ggplot(aes(y = lux_spend, x = Destination, fill = HomePlanet)) +
+  geom_boxplot() +
+  scale_y_continuous(labels = dollar) +
+  labs(x = 'Destination', y = 'Total Luxury Spend', title = 'Fig 8a. Luxury spend vs. Destination, Home Planet')
 ```
 
 <img src="README_files/figure-gfm/lux-noncryosleepers-1.png" style="display: block; margin: auto;" />
+
+``` r
+all_wrk_tmp %>%
+  filter(!CryoSleep) %>%
+  mutate(lux_spend = ShoppingMall + VRDeck + FoodCourt + Spa + RoomService) %>%
+  mutate(Num = as.numeric(Num)) %>%
+  ggplot(aes(x = Num, y = lux_spend, colour = HomePlanet)) +
+  geom_point() +
+  scale_y_continuous(labels = dollar) +
+  scale_x_continuous(labels = comma) +
+  labs(x = 'Number', y = element_blank(), title = 'Fig 8b. Luxury spend vs. Room number, Home Planet')
+```
+
+<img src="README_files/figure-gfm/lux-noncryosleepers-2.png" style="display: block; margin: auto;" />
 
 For now, we’ll predict the remaining luxury spend values on some
 variables such as HomePlanet, Destination, and Deck - variables that
@@ -1001,14 +990,6 @@ imput_lux_spend <- all_wrk_noncryo %>%
   complete() %>% 
   select(-ends_with('_fct'))
 ```
-
-    ## 
-    ##  iter imp variable
-    ##   1   1  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   2  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   3  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   4  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
-    ##   1   5  HomePlanet_fct  Destination_fct  Deck_fct  ShoppingMall  VRDeck  FoodCourt  Spa  RoomService
 
 Finally, we’ll add the predicted values back to the dataset, and compare
 the distributions of predicted/imputed values vs. the original dataset.
@@ -1044,12 +1025,6 @@ all_wrk %>%
   scale_y_continuous(labels = comma) +
   labs(x = 'Value', y = 'Count', fill = 'Dataset', title = 'Fig 9. Imputed vs. original dataset')
 ```
-
-    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
-
-    ## Warning: Removed 1732 rows containing non-finite values (stat_bin).
-
-    ## Warning: Removed 5 rows containing missing values (geom_bar).
 
 <img src="README_files/figure-gfm/lux-final-1.png" style="display: block; margin: auto;" />
 
@@ -1126,17 +1101,7 @@ imput_homeplanet <- all_wrk_tmp %>%
   complete() %>% 
   mutate(HomePlanet = as.character(HomePlanet_fct)) %>% 
   select(-ends_with('_fct'), -ends_with('_num'))
-```
 
-    ## 
-    ##  iter imp variable
-    ##   1   1  HomePlanet_fct  Deck_fct  Num_num
-    ##   1   2  HomePlanet_fct  Deck_fct  Num_num
-    ##   1   3  HomePlanet_fct  Deck_fct  Num_num
-    ##   1   4  HomePlanet_fct  Deck_fct  Num_num
-    ##   1   5  HomePlanet_fct  Deck_fct  Num_num
-
-``` r
 # Add these back to the dataset
 all_wrk_tmp <- all_wrk_tmp %>% 
   select(-HomePlanet) %>% 
@@ -1206,8 +1171,6 @@ all_wrk_grps %>%
   labs(x = 'Deck Distance with Groups', y = 'Count', title = 'Fig 12. Dsn of deck distance within groups')
 ```
 
-    ## `stat_bin()` using `bins = 30`. Pick better value with `binwidth`.
-
 <img src="README_files/figure-gfm/de-groups-1.png" style="display: block; margin: auto;" />
 
 This might enable some sort of modelling of missing deck information
@@ -1252,19 +1215,7 @@ imput_age <- all_wrk_tmp %>%
   ) %>%
   mice(method = 'rf', seed = 24601, maxit = 1) %>% 
   complete()
-```
 
-    ## 
-    ##  iter imp variable
-    ##   1   1  Side  Destination  Age  VIP
-    ##   1   2  Side  Destination  Age  VIP
-    ##   1   3  Side  Destination  Age  VIP
-    ##   1   4  Side  Destination  Age  VIP
-    ##   1   5  Side  Destination  Age  VIP
-
-    ## Warning: Number of logged events: 20
-
-``` r
 all_wrk_tmp <- all_wrk_tmp %>% 
   select(-Age) %>% 
   bind_cols(imput_age %>% select(Age))
@@ -1434,18 +1385,63 @@ predicting whether someone was inadvertently teleported or not. The top
 mutual information and information value, albeit reshuffled a little
 bit.
 
+Let’s check the Area under the Curve (AUC) for this model, which can be
+interpreted as the probability that the model ranks a randomly drawn
+positive example (i.e. `TRUE`) correctly before a randomly drawn
+negative (`FALSE`). An AUC of 0.5 suggests that the model is no better
+than a model that randomly classifies the examples it comes across,
+whereas an AUC of 1.0 suggests that the model is a perfect classifier.
+
+``` r
+performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]]
+```
+
+    ## [1] 0.8586274
+
+The Receiver Operating Curve from which the Area under the Curve is
+derived can also provide us with the optimal cutoff for use as a
+threshold when classifying examples.
+
+``` r
+st_rf_cutoff_obj <- performance(
+  prediction(
+    predict(st_rf_mod, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ), 
+  measure = "cost"
+)
+
+( st_rf_optimal_cutoff <- st_rf_cutoff_obj@x.values[[1]][which.min(st_rf_cutoff_obj@y.values[[1]])][[1]] ) 
+```
+
+    ## [1] 0.5284974
+
 ### 5.2.2 Validation
 
 We’ll now use this model to predict over our validation set, then we’ll
-check performance metrics such as sensitivity and specificity. Note that
-the sensitivity is our True Positive Rate, and specificity is our True
-Negative Rate.
+check performance metrics such as accuracy, sensitivity, and
+specificity. Note that, in this case, sensitivity is the ability of the
+model to correctly identify people who have been transported, and
+specificity which is the ability of the model to correctly identify
+someone who has not been transported.
 
 ``` r
 # Predict values and bind to the validation data-frame
 predicted_values <- valid_new %>% 
   bind_cols(
-    Prediction = predict(st_rf_mod, valid_new)
+    Prediction_prob = predict(st_rf_mod, valid_new, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    # Utilising the optimal cutoff derived earlier:
+    Prediction = ifelse(Prediction_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
   )
 
 # Confusion matrix and accuracy metrics
@@ -1458,29 +1454,34 @@ prediction_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE   984  188
-    ##      TRUE    322 1099
+    ##      FALSE   992  205
+    ##      TRUE    314 1082
 
 ``` r
 prediction_cm$overall[['Accuracy']]
 ```
 
-    ## [1] 0.8033166
+    ## [1] 0.7998457
 
 ``` r
 prediction_cm$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.7534456
+    ## [1] 0.7595712
 
 ``` r
 prediction_cm$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8539239
+    ## [1] 0.8407148
 
-Our sensitivity and specificity are not too bad, although I’m sure we
-can get better with a more targeted model!
+Accuracy, sensitivity, and specificity all look okay here, but it should
+be noted these do not provide the whole picture. Accuracy in particular
+can be quite misleading when there are substantial class imbalances in
+the underlying dataset such as when modelling rare events like the
+prevalence of rare diseases. The sensitivity and specificity measures
+aim to ameliorate this issue. AUC also tends to be more holistic,
+assessing the model across all possible classification thresholds.
 
 Before using this model to predict over the test set, let’s take a look
 at the VIP sub-group. Since they make up a small portion of total
@@ -1498,14 +1499,14 @@ prediction_vip_cm$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE    36    3
-    ##      TRUE      1   15
+    ##      FALSE    36    4
+    ##      TRUE      1   14
 
 ``` r
 prediction_vip_cm$overall[['Accuracy']]
 ```
 
-    ## [1] 0.9272727
+    ## [1] 0.9090909
 
 ``` r
 prediction_vip_cm$byClass[['Sensitivity']]
@@ -1517,7 +1518,7 @@ prediction_vip_cm$byClass[['Sensitivity']]
 prediction_vip_cm$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8333333
+    ## [1] 0.7777778
 
 It’s not too bad. Note the sensitivity is greater than that of the
 aggregate dataset, but the specificity is lower. i.e. We’re more likely
@@ -1539,7 +1540,7 @@ one by iteratively predicting the residuals from each new model
 iteration. This approach is understood to control both bias and
 variance, in contrast to the random forest algorithm which utilises
 multiple separate models and bootstrapped aggregation (bagging) which
-only controls for high variance in the model.
+mainly controls for high variance in the model.
 
 XGBoost only works over numeric variables, so we’ll need to one-hot
 encode our factors, we’ll use `caret` to do this:
@@ -1647,16 +1648,52 @@ title('Fig 15. XGBoost Feature Importance')
 
 <img src="README_files/figure-gfm/xgb-imp-1.png" style="display: block; margin: auto;" />
 
-### 5.3.2 Validation
-
-In validating this model, we see that it hasn’t done much better than
-the random forest we set up earlier. Accuracy, sensitivity, and
-specificity are around the same as that of the random forest.
+Finally - before we go on to validation, let’s check the AUC and find
+the optimal classification threshold for this model.
 
 ``` r
-predicted_values_xgb <- valid_xgb %>% 
+# AUC
+performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]]
+```
+
+    ## [1] 0.911246
+
+``` r
+# Optimal cut-off
+st_xgb_cutoff_obj <- performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_xgb$Transported) - 1
+  ), 
+  measure = "cost"
+)
+
+( st_xgb_optimal_cutoff <- st_xgb_cutoff_obj@x.values[[1]][which.min(st_xgb_cutoff_obj@y.values[[1]])][[1]] )
+```
+
+    ## [1] 0.5083346
+
+### 5.3.2 Validation
+
+In validating this model, we see that its done a little better than the
+random forest we set up earlier. Accuracy, sensitivity, and specificity
+are all slightly higher than that of the random forest model.
+
+``` r
+predicted_values_xgb <- valid_new %>% 
   bind_cols(
-    Prediction = predict(st_xgb_mod, valid_xgb)
+    Prediction_prob = predict(st_xgb_mod, valid_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Prediction = ifelse(Prediction_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
   )
 
 # Confusion matrix and accuracy metrics
@@ -1669,26 +1706,26 @@ prediction_cm_xgb$table
 
     ##           Reference
     ## Prediction FALSE TRUE
-    ##      FALSE   988  193
-    ##      TRUE    318 1094
+    ##      FALSE   998  199
+    ##      TRUE    308 1088
 
 ``` r
 prediction_cm_xgb$overall[['Accuracy']]
 ```
 
-    ## [1] 0.802931
+    ## [1] 0.8044736
 
 ``` r
 prediction_cm_xgb$byClass[['Sensitivity']]
 ```
 
-    ## [1] 0.7565084
+    ## [1] 0.7641654
 
 ``` r
 prediction_cm_xgb$byClass[['Specificity']]
 ```
 
-    ## [1] 0.8500389
+    ## [1] 0.8453768
 
 # 6 Prediction
 
@@ -1700,7 +1737,12 @@ final_output <- test_clean %>%
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_rf_mod, test_clean)
+    Transported_prob = predict(st_rf_mod, test_clean, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
@@ -1711,21 +1753,26 @@ nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
 ``` r
 # Write to a csv
-# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
+# fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79378
 
 final_output_xgb <- test_clean %>% 
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_xgb_mod, test_xgb)
+    Transported_prob = predict(st_xgb_mod, test_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
-nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
+nrow(final_output_xgb) == 4277
 ```
 
     ## [1] TRUE
 
 ``` r
-# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79705 - small difference, but perhaps due to overfitting?
+# fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79588
 ```

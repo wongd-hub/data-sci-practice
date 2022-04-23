@@ -844,20 +844,6 @@ importance %>%
   geom_col() +
   labs(x = 'Importance', y = 'Variable')
   
-# 4bii. Validation ----
-predicted_values <- valid_new %>% 
-  bind_cols(
-    Prediction = predict(st_rf_mod, valid_new)
-  )
-
-# Confusion matrix and accuracy metrics
-prediction_cm <- confusionMatrix(
-  predicted_values$Prediction, predicted_values$Transported)
-
-prediction_cm$table
-prediction_cm$byClass[['Sensitivity']]
-prediction_cm$byClass[['Specificity']]
-
 # AUC
 performance(
   prediction(
@@ -876,7 +862,26 @@ st_rf_cutoff_obj <- performance(
   measure = "cost"
 )
 
-st_rf_cutoff_obj@cutoffs[which.min(cost.perf@y.values[[1]])]
+st_rf_optimal_cutoff <- st_rf_cutoff_obj@x.values[[1]][which.min(st_rf_cutoff_obj@y.values[[1]])][[1]]
+
+# 4bii. Validation ----
+predicted_values <- valid_new %>% 
+  bind_cols(
+    Prediction_prob = predict(st_rf_mod, valid_new, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Prediction = ifelse(Prediction_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
+  )
+
+# Confusion matrix and accuracy metrics
+prediction_cm <- confusionMatrix(
+  predicted_values$Prediction, predicted_values$Transported)
+
+prediction_cm$table
+prediction_cm$byClass[['Sensitivity']]
+prediction_cm$byClass[['Specificity']]
 
 # Sub-groups
 #  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
@@ -973,10 +978,37 @@ xgb.plot.importance(
   )
 )
 
+# AUC
+performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_new$Transported) - 1
+  ),
+  measure = "auc"
+)@y.values[[1]] # 0.911246
+
+# Optimal cut-off
+st_xgb_cutoff_obj <- performance(
+  prediction(
+    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
+    as.numeric(train_xgb$Transported) - 1
+  ), 
+  measure = "cost"
+)
+
+st_xgb_optimal_cutoff <- st_xgb_cutoff_obj@x.values[[1]][which.min(st_xgb_cutoff_obj@y.values[[1]])][[1]]
+
+# Higher AUC == higher discrimination overall
+
 # 4cii. Validation ----
 predicted_values_xgb <- valid_new %>% 
   bind_cols(
-    Prediction = predict(st_xgb_mod, valid_xgb)
+    Prediction_prob = predict(st_xgb_mod, valid_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Prediction = ifelse(Prediction_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Prediction = as.factor(Prediction),
+    .keep = 'unused'
   )
 
 # Confusion matrix and accuracy metrics
@@ -987,15 +1019,6 @@ prediction_cm_xgb <- confusionMatrix(
 prediction_cm_xgb$table
 prediction_cm_xgb$byClass[['Sensitivity']]
 prediction_cm_xgb$byClass[['Specificity']]
-
-# AUC
-performance(
-  prediction(
-    predict(st_xgb_mod, train_xgb, type = "prob")[,2], 
-    as.numeric(train_new$Transported) - 1
-  ),
-  measure = "auc"
-)@y.values[[1]] # 0.911246
 
 # Sub-groups
 #  For now we'll look at the sub-group of VIPs, since there aren't many, we're not expecting the model
@@ -1013,25 +1036,35 @@ final_output <- test_clean %>%
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_rf_mod, test_clean)
+    Transported_prob = predict(st_rf_mod, test_clean, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_rf_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
 nrow(final_output) == 4277 # Size Kaggle expects for this solution
 
-fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79565
+fwrite(final_output, 'output/spaceship_titanic_rf_solution.csv') # Score: 0.79378
 
 final_output_xgb <- test_clean %>% 
   unite('PassengerId', GroupId:PassengerId, sep = "_") %>% 
   select(PassengerId) %>% 
   bind_cols(
-    Transported_fct = predict(st_xgb_mod, test_xgb)
+    Transported_prob = predict(st_xgb_mod, test_xgb, type = 'prob')[,2]
+  ) %>% 
+  mutate(
+    Transported = ifelse(Transported_prob > st_xgb_optimal_cutoff, TRUE, FALSE),
+    Transported_fct = as.factor(Transported),
+    .keep = 'unused'
   ) %>% 
   mutate(Transported = ifelse(Transported_fct == 'TRUE', 'True', 'False'), .keep = 'unused')
 
 nrow(final_output_xgb) == 4277 # Size Kaggle expects for this solution
 
-fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79191
+fwrite(final_output_xgb, 'output/spaceship_titanic_rf_solution_xgb.csv') # Score: 0.79588
 
 ## X. Archive ----
 
