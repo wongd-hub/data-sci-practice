@@ -1,4 +1,4 @@
-# Kaggle Analyses - Darren Wong
+# Kaggle Analyses Repository
 
 This is a repository I'm using to store my Kaggle Analyses which I'm doing to practice and to learn more about machine learning.
 
