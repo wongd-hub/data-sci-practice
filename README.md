@@ -4,3 +4,4 @@ This is a repository I'm using to store my data science (including Kaggle) analy
 
 - [**Kaggle - Spaceship Titanic**](./spaceship-titanic): Building a binary classifier (random forest & XGBoost) to determine whether someone will be inadvertently teleported to an alternate dimension.
 - [**Kaggle - Favorita Sales**](./favorita-sales): Forecasting the sales volumes of thousands of items at Favorita stores in Ecuador using time series analysis.
+- [**Kaggle - Stock Returns Modelling**](./stock-forecasting): Modelling and forecasting the returns of the stocks of Microsoft and Apple using time series analysis (ARIMA, ARIMA-GARCH).
