@@ -1,0 +1,19 @@
+---
+title: "Favorita Sales Forecasting"
+author: "Darren Wong"
+date: '2022-04-23'
+output:
+  github_document:
+    number_sections: true
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This is a time series analysis and forecasting exercise, with thousands of potential series to forecast
+This was written whilst going through Rob J Hyndman & George Athanasopoulos' excellent online book: [Forecasting: Principles and Practice (3rd ed)](https://otexts.com/fpp3/).
