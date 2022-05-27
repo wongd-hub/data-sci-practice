@@ -40,4 +40,15 @@ all_df <- bind_rows(
   msft %>% mutate(ticker = 'MSFT')
 ) 
 
+all_ts <- all_df %>% 
+  as_tsibble(
+    index = Date,
+    key = c(ticker)
+  )
+
+all_ts_diff <- all_ts %>% 
+  arrange(ticker, Date) %>% 
+  group_by(ticker) %>% 
+  
+
 ## 1a. EDA - Categorical Variables ----
