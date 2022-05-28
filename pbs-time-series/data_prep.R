@@ -184,7 +184,7 @@ for (i in 1:nrow(dl_list)) {
   
 # Bind each month into a single data-frame and save
 full_schedule <- schedule_dl %>% rbindlist()
-fwrite(full_schedule, 'prepped_data/full_schedule.csv')
+saveRDS(full_schedule, 'prepped_data/full_schedule.rds') # CSV is ~84mb, so save as RDS
 
 ## Final Setup ----
 # Extract ATC information for each PBS code. Some PBS codes are listed under more
