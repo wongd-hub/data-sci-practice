@@ -27,7 +27,7 @@ invisible({
 if (.Platform$OS.type == "windows") {
   setwd('E:/Projects/kaggle-analyses/pbs-time-series') # PC
 } else {
-  setwd('~/Documents/Projects/kaggle/pbs-time-series') # Macbook
+  setwd('~/Documents/Projects/kaggle/pbs-time-series') # MacOS
 }
 
 ## Process Date of Supply dispense volumes data ----
