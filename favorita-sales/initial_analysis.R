@@ -24,7 +24,7 @@ invisible({
 if (.Platform$OS.type == "windows") {
   setwd('E:/Projects/kaggle-analyses/favorita-sales') # PC
 } else {
-  setwd('~/Documents/Projects/kaggle/favorita-sales') # Macbook
+  setwd('~/Documents/Projects/kaggle/favorita-sales') # MacOS
 }
 
 ## Load data & manipulate ----
