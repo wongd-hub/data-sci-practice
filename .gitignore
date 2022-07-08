@@ -4,4 +4,4 @@
 .DS_Store
 *.Rhistory
 *.RData
-*inter*
+*intermediate*
