@@ -4,5 +4,4 @@
 .DS_Store
 *.Rhistory
 *.RData
-
-!courses/kaggle/data-viz/inter
+*inter*
