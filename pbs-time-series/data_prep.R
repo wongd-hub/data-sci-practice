@@ -57,7 +57,7 @@ raw_dl_list <- pbs_publications_archive %>%
 # Filter list of links to only months we've got Date of Supply data for Where
 # there are duplicates, choose the last link, assuming that'd be the most
 # updated
-dl_list <- tibble(link = test) %>% 
+dl_list <- tibble(link = raw_dl_list) %>% 
   mutate(scraped_date = str_extract(link, '[0-9]{4}-[0-9]{2}-01') %>% ymd()) %>% 
   inner_join(distinct_months, by = c('scraped_date' = 'MONTH_OF_SUPPLY')) %>% 
   group_by(scraped_date) %>% 
@@ -186,6 +186,8 @@ for (i in 1:nrow(dl_list)) {
 full_schedule <- schedule_dl %>% rbindlist()
 saveRDS(full_schedule, 'prepped_data/full_schedule.rds') # CSV is ~84mb, so save as RDS
 
+# full_schedule <- readRDS('prepped_data/full_schedule.rds')
+
 ## Final Setup ----
 # Extract ATC information for each PBS code. Some PBS codes are listed under more
 # than 1 ATC code, a simplifying assumption has been made that assumes the PBS
@@ -201,7 +203,11 @@ item_code_to_atc <- item_code_to_atc_wrk %>%
       summarise(n_atcs = n(), .groups = 'drop'),
     by = c('date', 'item-code')
   ) %>% 
-  mutate(atc_wgt = 1 / n_atcs, .keep = 'unused')
+  mutate(
+    atc_wgt = 1 / n_atcs, 
+    `item-code` = str_pad(`item-code`, side = 'left', pad = '0', width = 6),
+    .keep = 'unused'
+  )
 
 # Add ATC code information on to dos_wrk
 dos_w_atc <- dos_wrk %>% 
