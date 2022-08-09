@@ -47,20 +47,19 @@ atc_regex <- list(
   atc5 = r'([A-Z]{1}[0-9]{2}[A-Z]{1}[A-Z]{1}[0-9]{2})'
 )
 
+#' Will query the WHO website to find all child ATC codes one level down from the
+#' provided ATC code.
+#' 
+#' Will look up regex rules for this ATC code level and the next, as well as the difference
+#' (increment) between the two for use in figuring out which links point to the
+#' children of atc_code.
+#' 
+#' @param atc_code A string representing an ATC code (of level < 5).
+#' @param main_link A string representing the parent URL.
+#' 
+#' @examples 
+#' get_child_atcs('N03')
 get_child_atcs <- function(atc_code, main_link = 'https://www.whocc.no/atc_ddd_index') {
-  
-  #' Will query the WHO website to find all child ATC codes one level down from the
-  #' provided ATC code.
-  #' 
-  #' Will look up regex rules for this ATC code level and the next, as well as the difference
-  #' (increment) between the two for use in figuring out which links point to the
-  #' children of atc_code.
-  #' 
-  #' @param atc_code A string representing an ATC code (of level < 5).
-  #' @param main_link A string representing the parent URL.
-  #' 
-  #' @examples 
-  #' get_child_atcs('N03')
 
   current_level_regex <- atc_regex[
     lapply(atc_regex, function(x) str_detect(atc_code, x)) %>% unlist()
@@ -101,19 +100,18 @@ get_child_atcs <- function(atc_code, main_link = 'https://www.whocc.no/atc_ddd_i
   
 }
 
+#' Takes a link and checks to see if there is a table present
+#' inside of an element with ID attribute 'content'.
+#' 
+#' If there is no table present, return an empty tibble, else
+#' return the table.
+#' 
+#' @param link A string representing the URL to check.
+#' 
+#' @examples 
+#' check_and_harvest_table("https://www.whocc.no/atc_ddd_index/?code=N03AE&showdescription=no")
 check_and_harvest_table <- function(link) {
-  
-  #' Takes a link and checks to see if there is a table present
-  #' inside of an element with ID attribute 'content'.
-  #' 
-  #' If there is no table present, return an empty tibble, else
-  #' return the table.
-  #' 
-  #' @param link A string representing the URL to check.
-  #' 
-  #' @examples 
-  #' check_and_harvest_table("https://www.whocc.no/atc_ddd_index/?code=N03AE&showdescription=no")
-  
+
   tmp_url <- url(link, 'rb')
   
   tbl_tmp <- read_html(tmp_url) %>% 
@@ -151,21 +149,20 @@ check_and_harvest_table <- function(link) {
   
 }
 
+#' This function takes an ATC2 level code and walks through
+#' all children links underneath it through to the terminal
+#' node (ATC5, or the earliest ATC level that has a table present).
+#' At each terminal node, the DDD table will be harvested and added
+#' to the results dataframe.
+#'
+#' @param atc2s A single string or a character vector of ATC level 2 codes to query DDDs for (e.g. 'N05', or c('N05', 'J01')).
+#' @param main_link A string representing the parent URL.
+#' 
+#' @examples 
+#' scrape_ddds_atc2(c('N03', 'N05'))
 scrape_ddds_atc2 <- function(
   atc2s, main_link = 'https://www.whocc.no/atc_ddd_index'
 ) {
-  
-  #' This function takes an ATC2 level code and walks through
-  #' all children links underneath it through to the terminal
-  #' node (ATC5, or the earliest ATC level that has a table present).
-  #' At each terminal node, the DDD table will be harvested and added
-  #' to the results dataframe.
-  #'
-  #' @param atc2s A single string or a character vector of ATC level 2 codes to query DDDs for (e.g. 'N05', or c('N05', 'J01')).
-  #' @param main_link A string representing the parent URL.
-  #' 
-  #' @examples 
-  #' scrape_ddds_atc2(c('N03', 'N05'))
   
   atc5_ddds <- tibble(
     `ATC code` = character(),
