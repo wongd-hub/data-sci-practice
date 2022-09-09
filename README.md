@@ -2,7 +2,7 @@
 
 ## Learning/Practice
 
-- [**Working for courses taken on Udemy**](./udemy-courses)
+- ~~Working for courses taken on Udemy~~: Relocating to new repo
 
 
 ## Analyses
